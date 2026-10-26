@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.cache/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Environment & local logs
+*.log
+.env
+.env.local

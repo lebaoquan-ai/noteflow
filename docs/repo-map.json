@@ -1,0 +1,143 @@
+{
+  "version": "1.0.0",
+  "project": "noteflow",
+  "verificationCommands": {
+    "typecheck": "npm run typecheck",
+    "testHeadless": "npm run test:headless",
+    "devServer": "npm run dev"
+  },
+  "layers": {
+    "core": {
+      "allowedImports": ["zod", "src/core/**", "src/db/**", "src/ai/agent_contract.ts"],
+      "forbiddenImports": ["react", "react-dom", "src/ui/**"],
+      "modules": [
+        {
+          "path": "src/core/canvas/types.ts",
+          "exports": ["CanvasId", "LayerId", "NodeId", "JobId", "ScreenPoint", "WorldPoint", "WorldAABB", "CameraStateSchema", "StrokeStyleSchema", "StrokeCommittedEventSchema"],
+          "testFile": "tests/headless/canvas_math.test.ts"
+        },
+        {
+          "path": "src/core/canvas/math.ts",
+          "exports": ["screenToWorld", "worldToScreen", "zoomAroundPoint", "rotateCameraWithSnap", "computeStrokeAABB", "simplifyPolylineRDP", "isPointInPolygon", "aabbIntersects"],
+          "testFile": "tests/headless/canvas_math.test.ts"
+        },
+        {
+          "path": "src/core/commands/canvas_command.ts",
+          "exports": ["CanvasCommand", "CommitStrokeCommand", "MoveNodesCommand", "EraseNodesCommand", "CommandHistory"],
+          "testFile": "tests/headless/canvas_commands.test.ts"
+        },
+        {
+          "path": "src/core/commands/slice_erase_command.ts",
+          "exports": ["SliceEraseCommand"],
+          "testFile": "tests/headless/slice_eraser_and_browser_db.test.ts"
+        },
+        {
+          "path": "src/core/commands/zettel_commands.ts",
+          "exports": ["CreateZettelCardCommand", "LinkZettelsCommand"],
+          "testFile": "tests/headless/phase3_ghost_links_and_teaching_export.test.ts"
+        },
+        {
+          "path": "src/core/commands/math_and_media_commands.ts",
+          "exports": ["CompileMathBlockCommand", "DragToCiteCommand", "MathBlockContentSchema", "PdfCitationContentSchema"],
+          "testFile": "tests/headless/phase2_math_and_splitview_cite.test.ts"
+        }
+      ]
+    },
+    "db": {
+      "modules": [
+        {
+          "path": "src/db/schema.sql",
+          "description": "SQLite DDL with spatial_nodes_rtree and sync_rtree_* triggers",
+          "testFile": "tests/headless/db_rtree.test.ts"
+        },
+        {
+          "path": "src/db/engine_port.ts",
+          "exports": ["SqlEnginePort", "SqlStatementPort"],
+          "testFile": "tests/headless/slice_eraser_and_browser_db.test.ts"
+        },
+        {
+          "path": "src/db/client.ts",
+          "exports": ["NoteFlowDatabase"],
+          "testFile": "tests/headless/db_rtree.test.ts"
+        },
+        {
+          "path": "src/db/browser_sql_engine.ts",
+          "exports": ["BrowserSqlEngine"],
+          "testFile": "tests/headless/slice_eraser_and_browser_db.test.ts"
+        },
+        {
+          "path": "src/db/repositories/spatial_node_repository.ts",
+          "exports": ["SpatialNodeRepository", "SpatialNodeRecord"],
+          "testFile": "tests/headless/db_rtree.test.ts"
+        },
+        {
+          "path": "src/db/repositories/async_job_repository.ts",
+          "exports": ["AsyncJobRepository", "AsyncJobBadgeRecord"],
+          "testFile": "tests/headless/db_rtree.test.ts"
+        },
+        {
+          "path": "src/db/repositories/zettel_repository.ts",
+          "exports": ["ZettelRepository", "ZettelRecord", "ZettelLinkRecord"],
+          "testFile": "tests/headless/phase1_zettelkasten_and_lasso.test.ts"
+        }
+      ]
+    },
+    "aiAndState": {
+      "modules": [
+        {
+          "path": "src/ai/agent_contract.ts",
+          "exports": ["CreateZettelCardToolSchema", "UpdateJobBadgeToolSchema"],
+          "testFile": "tests/headless/tier0_and_product_kernel.test.ts"
+        },
+        {
+          "path": "src/ai/tier0_clustering/stroke_clusterer.ts",
+          "exports": ["Tier0StrokeClusterer", "TIER0_DEBOUNCE_MS"],
+          "testFile": "tests/headless/tier0_and_product_kernel.test.ts"
+        },
+        {
+          "path": "src/state/gesture_fsm.ts",
+          "exports": ["gestureReducer", "GestureState", "GestureEvent"],
+          "testFile": "tests/headless/gesture_fsm.test.ts"
+        },
+        {
+          "path": "src/state/async_job_queue.ts",
+          "exports": ["AsyncJobQueue"],
+          "testFile": "tests/headless/tier0_and_product_kernel.test.ts"
+        },
+        {
+          "path": "src/state/canvas_store.ts",
+          "exports": ["CanvasStore", "UnifiedSceneFrame", "ProjectedJobBadge"],
+          "testFile": "tests/headless/scene_graph_and_store.test.ts"
+        }
+      ]
+    },
+    "ui": {
+      "modules": [
+        {
+          "path": "src/ui/scene_graph/wet_ink_buffer.ts",
+          "exports": ["WetStrokeBuffer", "ingestPointerMove"],
+          "testFile": "tests/headless/scene_graph_and_store.test.ts"
+        },
+        {
+          "path": "src/ui/scene_graph/pointer_bridge.ts",
+          "exports": ["TabletPointerBridge"],
+          "testFile": "tests/headless/pointer_bridge.test.ts"
+        },
+        {
+          "path": "src/ui/scene_graph/canvas_renderer.ts",
+          "exports": ["DualCanvasRenderer", "SEMANTIC_COLOR_HEX"],
+          "testFile": "tests/headless/canvas_renderer.test.ts"
+        },
+        {
+          "path": "src/ui/scene_graph/artboard_exporter.ts",
+          "exports": ["exportCanvasArtboardSvg"],
+          "testFile": "tests/headless/phase3_ghost_links_and_teaching_export.test.ts"
+        },
+        {
+          "path": "src/ui/tablet_app.ts",
+          "exports": ["NoteFlowTabletApp", "bootstrapTabletApp"]
+        }
+      ]
+    }
+  }
+}
