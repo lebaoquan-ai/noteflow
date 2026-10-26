@@ -57,7 +57,8 @@ function drawSmoothFlatStroke(
   flatPoints: Float32Array,
   pointCount: number,
   style: StrokeStyle,
-  scaleFactor: number = 1.0
+  scaleFactor: number = 1.0,
+  layerOpacity: number = 1.0
 ): void {
   if (pointCount === 0) return;
 
@@ -66,12 +67,13 @@ function drawSmoothFlatStroke(
   ctx.fillStyle = SEMANTIC_COLOR_HEX[style.colorId];
   ctx.lineCap = style.brushType === 'highlighter' ? 'square' : 'round';
   ctx.lineJoin = 'round';
-  ctx.globalAlpha =
+  const baseAlpha =
     style.brushType === 'highlighter'
       ? 0.28
       : style.brushType === 'marker'
         ? 0.78
         : 1.0;
+  ctx.globalAlpha = baseAlpha * layerOpacity;
 
   if (pointCount === 1) {
     const x = flatPoints[0]!;
@@ -270,18 +272,22 @@ export class DualCanvasRenderer {
         node.strokePoints &&
         node.style?.brushType === 'highlighter'
       ) {
+        const layerOpacity = frame.layers?.get(node.layerId)?.opacity ?? 1.0;
         drawSmoothFlatStroke(
           ctx,
           node.strokePoints,
           Math.floor(node.strokePoints.length / 4),
           node.style,
-          1.0
+          1.0,
+          layerOpacity
         );
       }
     }
 
     // 3. Render Pen/Marker Strokes, Clusters, Zettel Cards, Media & Math Blocks
     for (const node of frame.visibleNodes) {
+      const layerOpacity = frame.layers?.get(node.layerId)?.opacity ?? 1.0;
+
       if (
         node.nodeType === 'vector_stroke' &&
         node.strokePoints &&
@@ -292,11 +298,13 @@ export class DualCanvasRenderer {
           node.strokePoints,
           Math.floor(node.strokePoints.length / 4),
           node.style ?? { colorId: 'noir', width: 2.8, brushType: 'pen' },
-          1.0
+          1.0,
+          layerOpacity
         );
       } else if (node.nodeType === 'stroke_cluster') {
         const isViolet = node.semanticTags.includes('violet');
         ctx.save();
+        ctx.globalAlpha = layerOpacity;
         ctx.strokeStyle = isViolet
           ? 'rgba(124, 58, 237, 0.45)'
           : 'rgba(148, 163, 184, 0.35)';
@@ -310,23 +318,32 @@ export class DualCanvasRenderer {
         );
         ctx.restore();
       } else if (node.nodeType === 'zettel_card') {
+        ctx.save();
+        ctx.globalAlpha = layerOpacity;
         this.renderZettelCardNode(
           ctx,
           node.bbox,
           node.contentJson ?? {},
         );
+        ctx.restore();
       } else if (node.nodeType === 'media_item') {
+        ctx.save();
+        ctx.globalAlpha = layerOpacity;
         this.renderPdfCitationNode(
           ctx,
           node.bbox,
           node.contentJson ?? {}
         );
+        ctx.restore();
       } else if (node.nodeType === 'math_block') {
+        ctx.save();
+        ctx.globalAlpha = layerOpacity;
         this.renderMathBlockNode(
           ctx,
           node.bbox,
           node.contentJson ?? {}
         );
+        ctx.restore();
       }
 
       if (selectedNodeIds.has(node.id)) {

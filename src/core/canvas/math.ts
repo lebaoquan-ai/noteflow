@@ -184,3 +184,21 @@ export function isPointInPolygon(
 export function aabbIntersects(a: WorldAABB, b: WorldAABB): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
+
+export const STROKE_CLUSTER_MAX_GAP_X = 48.0;
+export const STROKE_CLUSTER_MAX_GAP_Y = 24.0;
+
+/**
+ * Canonical anisotropic proximity predicate used by both forward stroke clustering
+ * (`Tier0StrokeClusterer`) and reverse disconnection partitioning (`pruneOrUpdateParentClusters`).
+ */
+export function areStrokeBoxesProximate(
+  a: WorldAABB,
+  b: WorldAABB,
+  maxGapX: number = STROKE_CLUSTER_MAX_GAP_X,
+  maxGapY: number = STROKE_CLUSTER_MAX_GAP_Y
+): boolean {
+  const gapX = Math.max(0, Math.max(a[0], b[0]) - Math.min(a[2], b[2]));
+  const gapY = Math.max(0, Math.max(a[1], b[1]) - Math.min(a[3], b[3]));
+  return gapX < maxGapX && gapY < maxGapY;
+}

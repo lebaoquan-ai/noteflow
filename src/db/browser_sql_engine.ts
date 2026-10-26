@@ -59,34 +59,234 @@ interface ZettelLinkRow {
   confidence: number;
 }
 
+interface EngineSnapshot {
+  readonly label: string;
+  readonly nextRowId: number;
+  readonly canvases: Map<string, Record<string, unknown>>;
+  readonly layers: Map<string, Record<string, unknown>>;
+  readonly spatialNodes: Map<string, SpatialNodeRow>;
+  readonly rtree: Map<number, RTreeEntry>;
+  readonly asyncJobs: Map<string, AsyncJobRow>;
+  readonly zettels: Map<string, ZettelRow>;
+  readonly zettelLinks: Map<string, ZettelLinkRow>;
+}
+
+const SPATIAL_CELL_SIZE = 256;
+const MAX_BUCKET_QUERY_CELLS = 4096;
+
+/**
+ * 2D Spatial Grid-Tree Index for sub-linear viewport/lasso AABB queries in the browser.
+ * Maps 256x256 world-space cells to sets of 64-bit integer `rowid`s.
+ */
+class SpatialGridIndex {
+  private readonly buckets = new Map<string, Set<number>>();
+  private readonly rowCells = new Map<number, string[]>();
+  private readonly oversizedRowIds = new Set<number>();
+
+  public upsert(entry: RTreeEntry): void {
+    this.remove(entry.id);
+    const cMinX = Math.floor(entry.min_x / SPATIAL_CELL_SIZE);
+    const cMaxX = Math.floor(entry.max_x / SPATIAL_CELL_SIZE);
+    const cMinY = Math.floor(entry.min_y / SPATIAL_CELL_SIZE);
+    const cMaxY = Math.floor(entry.max_y / SPATIAL_CELL_SIZE);
+    if ((cMaxX - cMinX + 1) * (cMaxY - cMinY + 1) > 256) {
+      this.oversizedRowIds.add(entry.id);
+      return;
+    }
+    const cells = this.computeCells(
+      entry.min_x,
+      entry.min_y,
+      entry.max_x,
+      entry.max_y
+    );
+    this.rowCells.set(entry.id, cells);
+    for (const key of cells) {
+      let bucket = this.buckets.get(key);
+      if (!bucket) {
+        bucket = new Set<number>();
+        this.buckets.set(key, bucket);
+      }
+      bucket.add(entry.id);
+    }
+  }
+
+  public remove(rowid: number): void {
+    this.oversizedRowIds.delete(rowid);
+    const prevCells = this.rowCells.get(rowid);
+    if (!prevCells) return;
+    for (const key of prevCells) {
+      const bucket = this.buckets.get(key);
+      if (bucket) {
+        bucket.delete(rowid);
+        if (bucket.size === 0) {
+          this.buckets.delete(key);
+        }
+      }
+    }
+    this.rowCells.delete(rowid);
+  }
+
+  public clear(): void {
+    this.buckets.clear();
+    this.rowCells.clear();
+    this.oversizedRowIds.clear();
+  }
+
+  public rebuildFrom(rtree: ReadonlyMap<number, RTreeEntry>): void {
+    this.clear();
+    for (const entry of rtree.values()) {
+      this.upsert(entry);
+    }
+  }
+
+  public queryCandidateRowIds(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    allEntries: ReadonlyMap<number, RTreeEntry>
+  ): Set<number> {
+    const cMinX = Math.floor(minX / SPATIAL_CELL_SIZE);
+    const cMaxX = Math.floor(maxX / SPATIAL_CELL_SIZE);
+    const cMinY = Math.floor(minY / SPATIAL_CELL_SIZE);
+    const cMaxY = Math.floor(maxY / SPATIAL_CELL_SIZE);
+    const totalCells = (cMaxX - cMinX + 1) * (cMaxY - cMinY + 1);
+
+    const matching = new Set<number>();
+    if (totalCells <= MAX_BUCKET_QUERY_CELLS) {
+      for (let cx = cMinX; cx <= cMaxX; cx++) {
+        for (let cy = cMinY; cy <= cMaxY; cy++) {
+          const bucket = this.buckets.get(`${cx}:${cy}`);
+          if (!bucket) continue;
+          for (const rowid of bucket) {
+            const entry = allEntries.get(rowid);
+            if (
+              entry &&
+              entry.max_x >= minX &&
+              entry.min_x <= maxX &&
+              entry.max_y >= minY &&
+              entry.min_y <= maxY
+            ) {
+              matching.add(rowid);
+            }
+          }
+        }
+      }
+      for (const rowid of this.oversizedRowIds) {
+        const entry = allEntries.get(rowid);
+        if (
+          entry &&
+          entry.max_x >= minX &&
+          entry.min_x <= maxX &&
+          entry.max_y >= minY &&
+          entry.min_y <= maxY
+        ) {
+          matching.add(rowid);
+        }
+      }
+      return matching;
+    }
+
+    // Fallback when querying an ultra-wide world frustum (>4096 cells)
+    for (const entry of allEntries.values()) {
+      if (
+        entry.max_x >= minX &&
+        entry.min_x <= maxX &&
+        entry.max_y >= minY &&
+        entry.min_y <= maxY
+      ) {
+        matching.add(entry.id);
+      }
+    }
+    return matching;
+  }
+
+  private computeCells(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number
+  ): string[] {
+    const cMinX = Math.floor(minX / SPATIAL_CELL_SIZE);
+    const cMaxX = Math.floor(maxX / SPATIAL_CELL_SIZE);
+    const cMinY = Math.floor(minY / SPATIAL_CELL_SIZE);
+    const cMaxY = Math.floor(maxY / SPATIAL_CELL_SIZE);
+    const keys: string[] = [];
+    for (let cx = cMinX; cx <= cMaxX; cx++) {
+      for (let cy = cMinY; cy <= cMaxY; cy++) {
+        keys.push(`${cx}:${cy}`);
+      }
+    }
+    return keys;
+  }
+}
+
 /**
  * Browser-safe synchronous SQL + R-Tree engine implementing `SqlEnginePort`.
- * Enforces identical trigger, foreign-key cascade, and R-Tree spatial indexing
- * semantics to `schema.sql` so all repositories and commands run at 120Hz in
- * tablet browsers with zero Node.js dependencies.
+ * Enforces identical transactional rollback, trigger, foreign-key cascade, and
+ * 2D spatial indexing semantics to `schema.sql` with zero Node.js dependencies.
  */
 export class BrowserSqlEngine implements SqlEnginePort {
   private nextRowId = 1;
-  private readonly canvases = new Map<string, Record<string, unknown>>();
-  private readonly layers = new Map<string, Record<string, unknown>>();
-  private readonly spatialNodes = new Map<string, SpatialNodeRow>();
-  private readonly rtree = new Map<number, RTreeEntry>();
-  private readonly asyncJobs = new Map<string, AsyncJobRow>();
-  private readonly zettels = new Map<string, ZettelRow>();
-  private readonly zettelLinks = new Map<string, ZettelLinkRow>();
+  private canvases = new Map<string, Record<string, unknown>>();
+  private layers = new Map<string, Record<string, unknown>>();
+  private spatialNodes = new Map<string, SpatialNodeRow>();
+  private spatialNodesByRowId = new Map<number, SpatialNodeRow>();
+  private rtree = new Map<number, RTreeEntry>();
+  private readonly spatialIndex = new SpatialGridIndex();
+  private asyncJobs = new Map<string, AsyncJobRow>();
+  private zettels = new Map<string, ZettelRow>();
+  private zettelLinks = new Map<string, ZettelLinkRow>();
+  private readonly transactionStack: EngineSnapshot[] = [];
 
-  public exec(_sql: string): void {
-    // Transaction / DDL statements are handled natively by the in-memory maps
+  public exec(sql: string): void {
+    const normalized = sql.replace(/\s+/g, ' ').trim();
+    if (normalized === 'BEGIN IMMEDIATE;' || normalized === 'BEGIN;') {
+      this.pushSnapshot('ROOT');
+      return;
+    }
+    if (normalized === 'COMMIT;') {
+      this.popSnapshot('ROOT');
+      return;
+    }
+    if (normalized === 'ROLLBACK;') {
+      this.rollbackToSnapshot('ROOT');
+      return;
+    }
+    if (normalized.startsWith('SAVEPOINT ')) {
+      const label = normalized.replace('SAVEPOINT ', '').replace(';', '').trim();
+      this.pushSnapshot(label);
+      return;
+    }
+    if (normalized.startsWith('RELEASE SAVEPOINT ')) {
+      const label = normalized
+        .replace('RELEASE SAVEPOINT ', '')
+        .replace(';', '')
+        .trim();
+      this.popSnapshot(label);
+      return;
+    }
+    if (normalized.startsWith('ROLLBACK TO SAVEPOINT ')) {
+      const label = normalized
+        .replace('ROLLBACK TO SAVEPOINT ', '')
+        .replace(';', '')
+        .trim();
+      this.rollbackToSnapshot(label);
+      return;
+    }
   }
 
   public close(): void {
     this.canvases.clear();
     this.layers.clear();
     this.spatialNodes.clear();
+    this.spatialNodesByRowId.clear();
     this.rtree.clear();
+    this.spatialIndex.clear();
     this.asyncJobs.clear();
     this.zettels.clear();
     this.zettelLinks.clear();
+    this.transactionStack.length = 0;
   }
 
   public prepare(sql: string): SqlStatementPort {
@@ -97,6 +297,64 @@ export class BrowserSqlEngine implements SqlEnginePort {
       get: (...params: unknown[]) => this.executeGet(normalized, params),
       all: (...params: unknown[]) => this.executeAll(normalized, params),
     };
+  }
+
+  private pushSnapshot(label: string): void {
+    this.transactionStack.push({
+      label,
+      nextRowId: this.nextRowId,
+      canvases: new Map(
+        [...this.canvases.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      layers: new Map(
+        [...this.layers.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      spatialNodes: new Map(
+        [...this.spatialNodes.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      rtree: new Map([...this.rtree.entries()].map(([k, v]) => [k, { ...v }])),
+      asyncJobs: new Map(
+        [...this.asyncJobs.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      zettels: new Map(
+        [...this.zettels.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      zettelLinks: new Map(
+        [...this.zettelLinks.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+    });
+  }
+
+  private popSnapshot(label: string): void {
+    for (let i = this.transactionStack.length - 1; i >= 0; i--) {
+      if (this.transactionStack[i]!.label === label) {
+        this.transactionStack.splice(i);
+        return;
+      }
+    }
+  }
+
+  private rollbackToSnapshot(label: string): void {
+    for (let i = this.transactionStack.length - 1; i >= 0; i--) {
+      const snap = this.transactionStack[i]!;
+      if (snap.label === label) {
+        this.nextRowId = snap.nextRowId;
+        this.canvases = snap.canvases;
+        this.layers = snap.layers;
+        this.spatialNodes = snap.spatialNodes;
+        this.spatialNodesByRowId.clear();
+        for (const node of this.spatialNodes.values()) {
+          this.spatialNodesByRowId.set(node.rowid, node);
+        }
+        this.rtree = snap.rtree;
+        this.spatialIndex.rebuildFrom(this.rtree);
+        this.asyncJobs = snap.asyncJobs;
+        this.zettels = snap.zettels;
+        this.zettelLinks = snap.zettelLinks;
+        this.transactionStack.splice(i);
+        return;
+      }
+    }
   }
 
   private executeRun(sql: string, params: unknown[]): void {
@@ -121,7 +379,7 @@ export class BrowserSqlEngine implements SqlEnginePort {
           canvas_id: params[1],
           name: params[2],
           layer_type: params[3],
-          z_index: params[4],
+          z_index: Number(params[4]),
         });
       }
       return;
@@ -161,14 +419,17 @@ export class BrowserSqlEngine implements SqlEnginePort {
       };
 
       this.spatialNodes.set(id, row);
+      this.spatialNodesByRowId.set(rowid, row);
       // Trigger: sync_rtree_insert / sync_rtree_update
-      this.rtree.set(rowid, {
+      const rtreeEntry: RTreeEntry = {
         id: rowid,
         min_x: row.min_x,
         max_x: row.max_x,
         min_y: row.min_y,
         max_y: row.max_y,
-      });
+      };
+      this.rtree.set(rowid, rtreeEntry);
+      this.spatialIndex.upsert(rtreeEntry);
       return;
     }
 
@@ -180,6 +441,43 @@ export class BrowserSqlEngine implements SqlEnginePort {
       if (row) {
         row.parent_cluster_id = parentClusterId;
         row.updated_at = updatedAt;
+      }
+      return;
+    }
+
+    if (
+      sql.startsWith(
+        'UPDATE spatial_nodes SET min_x = ?, min_y = ?, max_x = ?, max_y = ?, content_json = ?, semantic_tags_json = ?, updated_at = ? WHERE id = ?'
+      )
+    ) {
+      const minX = Number(params[0]);
+      const minY = Number(params[1]);
+      const maxX = Number(params[2]);
+      const maxY = Number(params[3]);
+      const contentJson = (params[4] as string | null) ?? null;
+      const semanticTagsJson = (params[5] as string | null) ?? null;
+      const updatedAt = Number(params[6]);
+      const id = String(params[7]);
+
+      const row = this.spatialNodes.get(id);
+      if (row) {
+        row.min_x = minX;
+        row.min_y = minY;
+        row.max_x = maxX;
+        row.max_y = maxY;
+        row.content_json = contentJson;
+        row.semantic_tags_json = semanticTagsJson;
+        row.updated_at = updatedAt;
+
+        const rtreeEntry: RTreeEntry = {
+          id: row.rowid,
+          min_x: minX,
+          max_x: maxX,
+          min_y: minY,
+          max_y: maxY,
+        };
+        this.rtree.set(row.rowid, rtreeEntry);
+        this.spatialIndex.upsert(rtreeEntry);
       }
       return;
     }
@@ -206,13 +504,15 @@ export class BrowserSqlEngine implements SqlEnginePort {
         row.updated_at = updatedAt;
 
         // Trigger: sync_rtree_update
-        this.rtree.set(row.rowid, {
+        const rtreeEntry: RTreeEntry = {
           id: row.rowid,
           min_x: minX,
           max_x: maxX,
           min_y: minY,
           max_y: maxY,
-        });
+        };
+        this.rtree.set(row.rowid, rtreeEntry);
+        this.spatialIndex.upsert(rtreeEntry);
       }
       return;
     }
@@ -223,8 +523,10 @@ export class BrowserSqlEngine implements SqlEnginePort {
         const existing = this.spatialNodes.get(id);
         if (existing) {
           this.spatialNodes.delete(id);
+          this.spatialNodesByRowId.delete(existing.rowid);
           // Trigger: sync_rtree_delete
           this.rtree.delete(existing.rowid);
+          this.spatialIndex.remove(existing.rowid);
         }
       }
 
@@ -348,6 +650,8 @@ export class BrowserSqlEngine implements SqlEnginePort {
       }
       return;
     }
+
+    throw new Error(`BrowserSqlEngine: unsupported run() SQL statement: ${sql}`);
   }
 
   private executeGet(sql: string, params: unknown[]): unknown {
@@ -369,6 +673,7 @@ export class BrowserSqlEngine implements SqlEnginePort {
         ...job,
         anchor_x: anchor.max_x,
         anchor_y: anchor.min_y,
+        anchor_layer_id: anchor.layer_id,
       };
     }
 
@@ -386,7 +691,7 @@ export class BrowserSqlEngine implements SqlEnginePort {
       return row ? { ...row } : undefined;
     }
 
-    return undefined;
+    throw new Error(`BrowserSqlEngine: unsupported get() SQL statement: ${sql}`);
   }
 
   private executeAll(sql: string, params: unknown[]): unknown[] {
@@ -431,6 +736,24 @@ export class BrowserSqlEngine implements SqlEnginePort {
     }
 
     if (
+      sql.includes(
+        "WHERE canvas_id = ? AND layer_id = ? AND node_type = 'stroke_cluster'"
+      )
+    ) {
+      const canvasId = String(params[0]);
+      const layerId = String(params[1]);
+      return [...this.spatialNodes.values()]
+        .filter(
+          (n) =>
+            n.canvas_id === canvasId &&
+            n.layer_id === layerId &&
+            n.node_type === 'stroke_cluster'
+        )
+        .sort((a, b) => a.created_at - b.created_at)
+        .map((n) => ({ ...n }));
+    }
+
+    if (
       sql.startsWith('SELECT * FROM spatial_nodes WHERE parent_cluster_id IN')
     ) {
       const clusterIds = new Set(params.map(String));
@@ -449,24 +772,29 @@ export class BrowserSqlEngine implements SqlEnginePort {
       const vMinY = Number(params[3]);
       const vMaxY = Number(params[4]);
 
-      const matchingRowIds = new Set<number>();
-      for (const entry of this.rtree.values()) {
-        if (
-          entry.max_x >= vMinX &&
-          entry.min_x <= vMaxX &&
-          entry.max_y >= vMinY &&
-          entry.min_y <= vMaxY
-        ) {
-          matchingRowIds.add(entry.id);
+      const matchingRowIds = this.spatialIndex.queryCandidateRowIds(
+        vMinX,
+        vMinY,
+        vMaxX,
+        vMaxY,
+        this.rtree
+      );
+
+      const candidates: SpatialNodeRow[] = [];
+      for (const rowid of matchingRowIds) {
+        const node = this.spatialNodesByRowId.get(rowid);
+        if (node && node.canvas_id === canvasId) {
+          candidates.push({ ...node });
         }
       }
 
-      return [...this.spatialNodes.values()]
-        .filter(
-          (n) => n.canvas_id === canvasId && matchingRowIds.has(n.rowid)
-        )
-        .sort((a, b) => a.created_at - b.created_at)
-        .map((n) => ({ ...n }));
+      return candidates.sort((a, b) => {
+        const zA = Number(this.layers.get(a.layer_id)?.z_index ?? 0);
+        const zB = Number(this.layers.get(b.layer_id)?.z_index ?? 0);
+        if (zA !== zB) return zA - zB;
+        if (a.created_at !== b.created_at) return a.created_at - b.created_at;
+        return a.id.localeCompare(b.id);
+      });
     }
 
     if (
@@ -483,6 +811,7 @@ export class BrowserSqlEngine implements SqlEnginePort {
           ...job,
           anchor_x: anchor.max_x,
           anchor_y: anchor.min_y,
+          anchor_layer_id: anchor.layer_id,
         });
       }
       return results.sort(
@@ -505,6 +834,7 @@ export class BrowserSqlEngine implements SqlEnginePort {
           ...job,
           anchor_x: anchor.max_x,
           anchor_y: anchor.min_y,
+          anchor_layer_id: anchor.layer_id,
         });
       }
       return results;
@@ -539,6 +869,6 @@ export class BrowserSqlEngine implements SqlEnginePort {
         .map((l) => ({ ...l }));
     }
 
-    return [];
+    throw new Error(`BrowserSqlEngine: unsupported all() SQL statement: ${sql}`);
   }
 }

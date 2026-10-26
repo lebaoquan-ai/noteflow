@@ -400,33 +400,41 @@ export class MoveNodesCommand implements CanvasCommand {
 ```
 
 ### 5.5 AI Agent Tool Contract
-When a Cloud VLM or autonomous agent modifies the canvas, it interacts strictly through typed tool calls:
+When a Cloud VLM or autonomous agent modifies the canvas, it interacts strictly through typed tool calls (`src/ai/agent_contract.ts`):
 
 ```typescript
 // src/ai/agent_contract.ts
 import { z } from 'zod';
 
+/**
+ * Tool 1: Create or Update a Zettel Card from a Stroke Cluster
+ */
 export const CreateZettelCardToolSchema = z.object({
-  canvasId: z.string().uuid(),
-  layerId: z.string().uuid(),
-  position: z.object({ x: z.number(), y: z.number() }),
-  title: z.string().min(1).max(120),
-  atomicStatement: z.string().min(10).max(1000),
-  citationTether: z.object({
-    pdfId: z.string().optional(),
-    pageNumber: z.number().int().optional(),
-    originNodeId: z.string().optional(),
-  }).optional(),
-  tags: z.array(z.string()),
+  anchorClusterId: z.string().uuid(),
+  title: z.string().min(3).max(80),
+  summaryMarkdown: z.string(),
+  latexBlocks: z.array(z.string()).default([]),
+  verificationState: z.enum(['unverified', 'verified', 'conflict', 'hint']),
+  worldPosition: z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+  }),
 });
 
+export type CreateZettelCardToolInput = z.infer<typeof CreateZettelCardToolSchema>;
+
+/**
+ * Tool 2: Update Async Job Badge
+ */
 export const UpdateJobBadgeToolSchema = z.object({
   jobId: z.string().uuid(),
-  status: z.enum(['queued', 'running', 'completed', 'failed']),
-  badgeColor: z.enum(['forest', 'amber', 'cobalt']),
-  summary: z.string(),
-  detailedMarkdown: z.string(),
+  status: z.enum(['completed', 'failed']),
+  badgeState: z.enum(['verified', 'conflict', 'hint_available']),
+  tooltipMessage: z.string().max(140),
+  linkedZettelId: z.string().uuid().optional(),
 });
+
+export type UpdateJobBadgeToolInput = z.infer<typeof UpdateJobBadgeToolSchema>;
 ```
 
 ### 5.6 Headless AI Testing Harness (No Physical Tablet Required)
@@ -442,111 +450,100 @@ To allow autonomous AI coding agents to verify their work in CI/CD without an iP
 > **CRITICAL SQLITE INVARIANT:** SQLite `rtree` virtual tables require a 64-bit signed `INTEGER` primary key. Therefore, `spatial_nodes_rtree.id` maps directly to `spatial_nodes.rowid` (SQLite's built-in integer row identifier) via automatic SQL triggers. Never insert UUID strings into `spatial_nodes_rtree.id`.
 
 ```sql
--- 1. Canvases
-CREATE TABLE canvases (
-    id TEXT PRIMARY KEY,           -- UUID
+-- 1. Canvases & Smart Layers
+CREATE TABLE IF NOT EXISTS canvases (
+    id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
-    grid_config JSON NOT NULL DEFAULT '{"type":"dot","spacing":20,"snap":false}',
-    context_summary JSON,          -- Maintained by Tier 3 Edge VLM
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    camera_state_json TEXT NOT NULL, -- { panX, panY, zoom, rotation }
+    updated_at INTEGER NOT NULL
 );
 
--- 2. Layers
-CREATE TABLE layers (
-    id TEXT PRIMARY KEY,           -- UUID
+CREATE TABLE IF NOT EXISTS layers (
+    id TEXT PRIMARY KEY,
     canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,            -- 'Presentation', 'AI Layer', 'Draft Ink', 'Reference'
+    name TEXT NOT NULL,
+    layer_type TEXT NOT NULL CHECK(layer_type IN ('notes', 'hints_work', 'ai_feedback', 'math_formal')),
     z_index INTEGER NOT NULL,
-    opacity REAL DEFAULT 1.0,
-    is_visible BOOLEAN DEFAULT 1,
-    is_locked BOOLEAN DEFAULT 0,
-    auto_tool_binding TEXT         -- e.g. 'violet' -> AI Layer
+    is_visible INTEGER NOT NULL DEFAULT 1,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    opacity REAL NOT NULL DEFAULT 1.0
 );
 
--- 3. Spatial Nodes (Uses implicit integer `rowid` for R-Tree mapping)
-CREATE TABLE spatial_nodes (
-    id TEXT PRIMARY KEY,           -- UUID for application & React layer
+-- 2. Spatial Nodes (Single source of truth for all canvas items)
+CREATE TABLE IF NOT EXISTS spatial_nodes (
+    id TEXT PRIMARY KEY,
     canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
     layer_id TEXT NOT NULL REFERENCES layers(id) ON DELETE CASCADE,
-    parent_group_id TEXT REFERENCES spatial_nodes(id) ON DELETE SET NULL, -- Links raw strokes to a `stroke_cluster`
-    node_type TEXT NOT NULL,       -- 'vector_stroke', 'stroke_cluster', 'pdf_snippet', 'zettel_card', 'ai_chart'
+    node_type TEXT NOT NULL CHECK(node_type IN (
+        'vector_stroke', 'stroke_cluster', 'zettel_card', 'math_block', 'media_item', 'portal'
+    )),
+    parent_cluster_id TEXT REFERENCES spatial_nodes(id) ON DELETE SET NULL,
     min_x REAL NOT NULL,
     min_y REAL NOT NULL,
     max_x REAL NOT NULL,
     max_y REAL NOT NULL,
-    vector_payload JSON,           -- Compressed point stream [{x,y,p,t}] or SVG/chart spec
-    style_config JSON NOT NULL,    -- {colorId: 'noir', width: 1.5, brush: 'pen', isTask: false, isCompleted: false, dueDate: null}
-    ocr_transcript TEXT,           -- Populated by Tier 1 OCR on `stroke_cluster`
-    source_provenance JSON,        -- {pdfId, page, bbox, url}
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    stroke_points BLOB,
+    style_json TEXT,
+    content_json TEXT,
+    ocr_text TEXT,
+    semantic_tags_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
--- Spatial Index for Instant Lasso & Viewport Culling
--- Maps `id` (INTEGER) to `spatial_nodes.rowid`
-CREATE VIRTUAL TABLE spatial_nodes_rtree USING rtree(
-    id,
-    min_x, max_x,
-    min_y, max_y
+-- 3. R-Tree Spatial Index (64-bit integer id synced to spatial_nodes.rowid)
+CREATE VIRTUAL TABLE IF NOT EXISTS spatial_nodes_rtree USING rtree(
+    id, min_x, max_x, min_y, max_y
 );
 
--- Automatic Triggers to Keep R-Tree Synchronized with `spatial_nodes`
-CREATE TRIGGER sync_rtree_insert AFTER INSERT ON spatial_nodes BEGIN
+-- Automatic Triggers to guarantee R-Tree never drifts from spatial_nodes
+CREATE TRIGGER IF NOT EXISTS sync_rtree_insert AFTER INSERT ON spatial_nodes BEGIN
     INSERT INTO spatial_nodes_rtree(id, min_x, max_x, min_y, max_y)
     VALUES (new.rowid, new.min_x, new.max_x, new.min_y, new.max_y);
 END;
 
-CREATE TRIGGER sync_rtree_update AFTER UPDATE OF min_x, min_y, max_x, max_y ON spatial_nodes BEGIN
+CREATE TRIGGER IF NOT EXISTS sync_rtree_update AFTER UPDATE OF min_x, min_y, max_x, max_y ON spatial_nodes BEGIN
     UPDATE spatial_nodes_rtree
     SET min_x = new.min_x, max_x = new.max_x, min_y = new.min_y, max_y = new.max_y
     WHERE id = new.rowid;
 END;
 
-CREATE TRIGGER sync_rtree_delete AFTER DELETE ON spatial_nodes BEGIN
+CREATE TRIGGER IF NOT EXISTS sync_rtree_delete AFTER DELETE ON spatial_nodes BEGIN
     DELETE FROM spatial_nodes_rtree WHERE id = old.rowid;
 END;
 
--- 4. Asynchronous Background Jobs
--- Badge position is derived dynamically via JOIN on `anchor_node_id` (spatial_nodes.max_x, spatial_nodes.min_y)
-CREATE TABLE async_jobs (
-    id TEXT PRIMARY KEY,           -- UUID
+-- 4. Async Job Queue & Badge Status
+CREATE TABLE IF NOT EXISTS async_jobs (
+    id TEXT PRIMARY KEY,
     canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
     anchor_node_id TEXT NOT NULL REFERENCES spatial_nodes(id) ON DELETE CASCADE,
-    job_type TEXT NOT NULL,        -- 'verify_claim', 'deep_research', 'generate_graph', 'atomize'
-    status TEXT NOT NULL,          -- 'queued', 'running', 'completed', 'failed'
-    badge_color TEXT,              -- 'forest', 'amber', 'cobalt'
-    input_snapshot_uri TEXT,
-    result_payload JSON,           -- {summary, markdown, citations, chartSpec}
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at DATETIME
+    job_type TEXT NOT NULL CHECK(job_type IN ('cluster_ocr', 'verify_claim', 'compile_latex', 'synthesize_zettel')),
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+    result_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
--- 5. Atomic Zettelkasten Vault
-CREATE TABLE zettels (
-    id TEXT PRIMARY KEY,           -- UUID
+-- 5. Zettelkasten Knowledge Graph
+CREATE TABLE IF NOT EXISTS zettels (
+    id TEXT PRIMARY KEY,
+    spatial_node_id TEXT UNIQUE REFERENCES spatial_nodes(id) ON DELETE SET NULL,
     title TEXT NOT NULL,
-    atomic_statement TEXT NOT NULL,
-    handwriting_snapshot_uri TEXT, -- Cropped PNG/SVG of original ink cluster
-    socratic_qa_log JSON,          -- Socratic dialogue record
-    source_provenance JSON NOT NULL,
-    tags JSON NOT NULL DEFAULT '[]',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    summary_markdown TEXT NOT NULL,
+    latex_blocks_json TEXT,
+    verification_state TEXT NOT NULL CHECK(verification_state IN ('unverified', 'verified', 'conflict', 'hint')),
+    embedding F32_BLOB(768),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 
--- 6. Zettel Vector Embeddings (sqlite-vec)
-CREATE VIRTUAL TABLE zettel_embeddings USING vec0(
-    zettel_id TEXT PRIMARY KEY,
-    embedding FLOAT[384]           -- 384 dimensions for all-MiniLM-L6-v2
-);
-
--- 7. Knowledge Graph Links
-CREATE TABLE zettel_links (
-    source_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
-    target_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
-    relation_type TEXT NOT NULL,   -- 'supports', 'contradicts', 'extends', 'example_of'
-    rationale TEXT,
-    PRIMARY KEY (source_id, target_id)
+CREATE TABLE IF NOT EXISTS zettel_links (
+    id TEXT PRIMARY KEY,
+    source_zettel_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
+    target_zettel_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL CHECK(relation_type IN ('supports', 'contradicts', 'derives_from', 'related')),
+    confidence REAL NOT NULL DEFAULT 1.0,
+    UNIQUE(source_zettel_id, target_zettel_id, relation_type)
 );
 ```
 

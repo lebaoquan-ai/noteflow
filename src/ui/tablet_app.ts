@@ -1,6 +1,9 @@
 import {
   screenPoint,
   worldAABB,
+  type JobId,
+  type NodeId,
+  type ScreenPoint,
   type SemanticColor,
 } from '../core/canvas/types.js';
 import { screenToWorld } from '../core/canvas/math.js';
@@ -16,6 +19,7 @@ import {
 import { ZettelRepository } from '../db/repositories/zettel_repository.js';
 import {
   CanvasStore,
+  type ProjectedJobBadge,
   type RadialToolSlot,
 } from '../state/canvas_store.js';
 import {
@@ -80,6 +84,12 @@ export class NoteFlowTabletApp {
   private dryRafPending = false;
   private selectedNodeIds = new Set<string>();
   private readonly scheduledJobs = new Set<string>();
+  public inspectedBadgeId: JobId | null = null;
+  public pinnedRadialAnchor: ScreenPoint | null = null;
+  private pendingBadgeTap: {
+    readonly pointerId: number;
+    readonly startPt: ScreenPoint;
+  } | null = null;
 
   private lastPointerType = 'pen';
   private lastPressure = 0.5;
@@ -245,6 +255,43 @@ export class NoteFlowTabletApp {
           <span>•</span>
           <span><strong>1-Finger Hold + Pen:</strong> Magic Lasso</span>
         </footer>
+
+        <!-- Floating 6-Slot Radial Tool Wheel (Appears at 1-Finger Hold Anchor) -->
+        <div id="radial-wheel-overlay" class="nf-radial-wheel" aria-hidden="true">
+          <div class="nf-radial-center">HOLD<br/>WHEEL</div>
+          <button class="nf-radial-slice nf-tool-active" data-radial-tool="fountain_pen" style="left: 90px; top: 24px;">
+            <span>✒️</span><span>Pen</span>
+          </button>
+          <button class="nf-radial-slice" data-radial-tool="felt_tip_marker" style="left: 147px; top: 57px;">
+            <span>🖍️</span><span>Mark</span>
+          </button>
+          <button class="nf-radial-slice" data-radial-tool="ai_highlighter" style="left: 147px; top: 123px;">
+            <span>✨</span><span>AI</span>
+          </button>
+          <button class="nf-radial-slice" data-radial-tool="freehand_lasso" style="left: 90px; top: 156px;">
+            <span>➰</span><span>Lasso</span>
+          </button>
+          <button class="nf-radial-slice" data-radial-tool="stroke_eraser" style="left: 33px; top: 123px;">
+            <span>✂️</span><span>Slice</span>
+          </button>
+          <button class="nf-radial-slice" data-radial-tool="pan_laser" style="left: 33px; top: 57px;">
+            <span>🔴</span><span>Laser</span>
+          </button>
+        </div>
+
+        <!-- AI Status Badge Inspection Popover -->
+        <div id="badge-popover-overlay" class="nf-badge-popover" role="dialog" aria-label="AI Badge Details">
+          <div class="nf-badge-popover-header">
+            <span class="nf-badge-pill" id="badge-popover-status-pill">verified</span>
+            <button class="nf-btn" id="btn-popover-close" title="Close Popover">✕</button>
+          </div>
+          <div class="nf-badge-popover-message" id="badge-popover-message">
+            Claim & spatial cluster verified.
+          </div>
+          <button class="nf-action-btn" id="btn-popover-spawn-zettel">
+            ⚛ Synthesize Linked Zettel Card
+          </button>
+        </div>
       </div>
     `;
   }
@@ -271,9 +318,49 @@ export class NoteFlowTabletApp {
     window.addEventListener('resize', updateSize);
   }
 
+  private getCanvasScreenPoint(clientX: number, clientY: number): ScreenPoint {
+    const rect = this.wetCanvas.getBoundingClientRect();
+    return screenPoint(clientX - rect.left, clientY - rect.top);
+  }
+
+  public selectTool(tool: RadialToolSlot): void {
+    this.store.selectRadialTool(tool);
+    this.pinnedRadialAnchor = null;
+    this.syncToolSelection();
+    this.syncSwatchSelection();
+    this.updateHudState();
+  }
+
   private bindPointerEvents(): void {
     this.wetCanvas.addEventListener('pointerdown', (e: PointerEvent) => {
       e.preventDefault();
+      const tapPt = this.getCanvasScreenPoint(e.clientX, e.clientY);
+
+      if (this.pinnedRadialAnchor !== null) {
+        const sliceTool = hitTestRadialWheelSlice(
+          this.pinnedRadialAnchor,
+          tapPt
+        );
+        this.pinnedRadialAnchor = null;
+        if (sliceTool !== null) {
+          this.selectTool(sliceTool);
+          return;
+        }
+      }
+
+      const hitBadge = this.store.hitTestBadgeAtScreenPoint(
+        tapPt,
+        this.viewportWidth,
+        this.viewportHeight
+      );
+      if (hitBadge) {
+        this.pendingBadgeTap = { pointerId: e.pointerId, startPt: tapPt };
+      } else {
+        this.pendingBadgeTap = null;
+        if (this.inspectedBadgeId !== null) {
+          this.closeBadgePopover();
+        }
+      }
       try {
         this.wetCanvas.setPointerCapture(e.pointerId);
       } catch {
@@ -291,6 +378,20 @@ export class NoteFlowTabletApp {
       this.lastPointerType = adapted.pointerType;
       this.lastPressure = adapted.pressure;
       this.lastCoalescedCount = adapted.getCoalescedEvents?.().length ?? 1;
+      if (
+        this.pendingBadgeTap &&
+        this.pendingBadgeTap.pointerId === e.pointerId
+      ) {
+        const movePt = this.getCanvasScreenPoint(e.clientX, e.clientY);
+        if (
+          Math.hypot(
+            movePt.x - this.pendingBadgeTap.startPt.x,
+            movePt.y - this.pendingBadgeTap.startPt.y
+          ) > 8
+        ) {
+          this.pendingBadgeTap = null;
+        }
+      }
       this.bridge.handlePointerMove(adapted);
     });
 
@@ -303,7 +404,40 @@ export class NoteFlowTabletApp {
       } catch {
         // Ignore
       }
-      this.bridge.handlePointerUp(adaptDomPointerEvent(e));
+      const adapted = adaptDomPointerEvent(e);
+      const endPt = this.getCanvasScreenPoint(e.clientX, e.clientY);
+
+      if (
+        this.pendingBadgeTap &&
+        this.pendingBadgeTap.pointerId === e.pointerId
+      ) {
+        const tapDist = Math.hypot(
+          endPt.x - this.pendingBadgeTap.startPt.x,
+          endPt.y - this.pendingBadgeTap.startPt.y
+        );
+        this.pendingBadgeTap = null;
+        if (tapDist <= 8) {
+          this.bridge.handlePointerCancel(adapted);
+          this.openBadgePopoverAtScreenPoint(endPt);
+          this.updateHudState();
+          return;
+        }
+      }
+
+      if (
+        this.bridge.gestureState === 'TOUCH_HOLD_MODIFIER' &&
+        this.bridge.holdAnchor !== null
+      ) {
+        const anchor = this.bridge.holdAnchor;
+        const sliceHit = hitTestRadialWheelSlice(anchor, endPt);
+        if (sliceHit !== null) {
+          this.selectTool(sliceHit);
+        } else if (Math.hypot(endPt.x - anchor.x, endPt.y - anchor.y) < 24) {
+          this.pinnedRadialAnchor = anchor;
+        }
+      }
+
+      this.bridge.handlePointerUp(adapted);
       this.pumpBackgroundAiJobs();
       this.updateHudState();
     };
@@ -311,6 +445,7 @@ export class NoteFlowTabletApp {
     this.wetCanvas.addEventListener('pointerup', handleEnd);
     this.wetCanvas.addEventListener('pointercancel', (e: PointerEvent) => {
       e.preventDefault();
+      this.pendingBadgeTap = null;
       this.bridge.handlePointerCancel(adaptDomPointerEvent(e));
       this.updateHudState();
     });
@@ -322,7 +457,10 @@ export class NoteFlowTabletApp {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
           const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
-          this.store.zoomCamera(screenPoint(e.clientX, e.clientY), zoomFactor);
+          this.store.zoomCamera(
+            this.getCanvasScreenPoint(e.clientX, e.clientY),
+            zoomFactor
+          );
         } else {
           this.store.panCamera(-e.deltaX, -e.deltaY);
         }
@@ -334,16 +472,26 @@ export class NoteFlowTabletApp {
   }
 
   private bindToolbarEvents(): void {
-    // Tool buttons
     const toolButtons = this.root.querySelectorAll<HTMLButtonElement>('[data-tool]');
     toolButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
-        const tool = btn.dataset.tool as RadialToolSlot;
-        this.store.selectRadialTool(tool);
-        toolButtons.forEach((b) => b.classList.toggle('nf-tool-active', b === btn));
-        this.syncSwatchSelection();
-        this.updateHudState();
+        this.selectTool(btn.dataset.tool as RadialToolSlot);
       });
+    });
+
+    const radialButtons = this.root.querySelectorAll<HTMLButtonElement>('[data-radial-tool]');
+    radialButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.selectTool(btn.dataset.radialTool as RadialToolSlot);
+      });
+    });
+
+    // Badge Popover Close & Synthesize Linked Zettel Card buttons
+    this.root.querySelector('#btn-popover-close')?.addEventListener('click', () => {
+      this.closeBadgePopover();
+    });
+    this.root.querySelector('#btn-popover-spawn-zettel')?.addEventListener('click', () => {
+      this.synthesizeZettelFromInspectedBadge();
     });
 
     // Color swatches
@@ -442,6 +590,23 @@ export class NoteFlowTabletApp {
     link.download = `noteflow-artboard-${Date.now()}.svg`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  private syncToolSelection(): void {
+    const activeTool = this.store.activeTool;
+    this.root
+      .querySelectorAll<HTMLButtonElement>('[data-tool]')
+      .forEach((b) =>
+        b.classList.toggle('nf-tool-active', b.dataset.tool === activeTool)
+      );
+    this.root
+      .querySelectorAll<HTMLButtonElement>('[data-radial-tool]')
+      .forEach((b) =>
+        b.classList.toggle(
+          'nf-tool-active',
+          b.dataset.radialTool === activeTool
+        )
+      );
   }
 
   private syncSwatchSelection(): void {
@@ -650,32 +815,16 @@ export class NoteFlowTabletApp {
 
         // Transition `◌` (queued) -> `↻` (running) after 350ms
         setTimeout(() => {
-          const current = this.store.jobRepo.getBadgeById(badge.id);
-          if (!current) return;
-
-          const runningUpdate = UpdateJobBadgeToolSchema.parse({
-            jobId: badge.id,
-            status: 'running',
-            summaryMessage: 'Evaluating spatial ink cluster...',
-            verificationState: 'unverified',
-          });
-          this.store.jobQueue.applyToolUpdate(runningUpdate);
-          this.scheduleDryRender();
+          if (advanceBackgroundJobPhase(this.store, badge.id, 'running')) {
+            this.scheduleDryRender();
+          }
         }, 350);
 
         // Transition `↻` (running) -> `●` (completed) after 1100ms
         setTimeout(() => {
-          const current = this.store.jobRepo.getBadgeById(badge.id);
-          if (!current) return;
-
-          const completedUpdate = UpdateJobBadgeToolSchema.parse({
-            jobId: badge.id,
-            status: 'completed',
-            summaryMessage: 'Claim & spatial cluster verified.',
-            verificationState: 'verified',
-          });
-          this.store.jobQueue.applyToolUpdate(completedUpdate);
-          this.scheduleDryRender();
+          if (advanceBackgroundJobPhase(this.store, badge.id, 'completed')) {
+            this.scheduleDryRender();
+          }
         }, 1100);
       }
     }
@@ -728,6 +877,101 @@ export class NoteFlowTabletApp {
     this.dryCtx.restore();
   }
 
+  public openBadgePopoverAtScreenPoint(pt: ScreenPoint): ProjectedJobBadge | null {
+    const hit = this.store.hitTestBadgeAtScreenPoint(
+      pt,
+      this.viewportWidth,
+      this.viewportHeight
+    );
+    if (!hit) {
+      this.closeBadgePopover();
+      return null;
+    }
+
+    this.inspectedBadgeId = hit.id;
+    this.syncBadgePopoverDom(hit);
+    return hit;
+  }
+
+  public closeBadgePopover(): void {
+    this.inspectedBadgeId = null;
+    const popoverEl = this.root.querySelector<HTMLElement>(
+      '#badge-popover-overlay'
+    );
+    popoverEl?.classList.remove('nf-badge-popover-visible');
+  }
+
+  public synthesizeZettelFromInspectedBadge(): boolean {
+    if (!this.inspectedBadgeId) return false;
+    const zettelNodeId = synthesizeZettelForBadge(
+      this.store,
+      this.zettelRepo,
+      this.inspectedBadgeId
+    );
+    if (!zettelNodeId) {
+      this.updateHudState();
+      return false;
+    }
+
+    this.closeBadgePopover();
+    this.scheduleDryRender();
+    this.updateHudState();
+    return true;
+  }
+
+  private syncBadgePopoverDom(badge: ProjectedJobBadge): void {
+    const popoverEl = this.root.querySelector<HTMLElement>(
+      '#badge-popover-overlay'
+    );
+    if (!popoverEl) return;
+
+    const pillEl = this.root.querySelector<HTMLElement>(
+      '#badge-popover-status-pill'
+    );
+    const msgEl = this.root.querySelector<HTMLElement>(
+      '#badge-popover-message'
+    );
+    const spawnBtn = this.root.querySelector<HTMLButtonElement>(
+      '#btn-popover-spawn-zettel'
+    );
+
+    const badgeState =
+      typeof badge.resultJson?.badgeState === 'string'
+        ? badge.resultJson.badgeState
+        : badge.status;
+    const tooltipMessage =
+      typeof badge.resultJson?.tooltipMessage === 'string'
+        ? badge.resultJson.tooltipMessage
+        : badge.status === 'queued'
+          ? '◌ Queued for background verification...'
+          : badge.status === 'running'
+            ? '↻ Analysing spatial stroke cluster...'
+            : '● Claim & spatial cluster verified.';
+    const alreadySynthesized =
+      typeof badge.resultJson?.linkedZettelId === 'string';
+
+    if (pillEl) pillEl.textContent = `${badge.status} • ${badgeState}`;
+    if (msgEl) msgEl.textContent = tooltipMessage;
+    if (spawnBtn) {
+      spawnBtn.disabled = alreadySynthesized;
+      spawnBtn.textContent = alreadySynthesized
+        ? '✓ Linked Zettel Synthesized'
+        : '⚛ Synthesize Linked Zettel Card';
+    }
+
+    const left = Math.min(
+      Math.max(16, Math.round(badge.screenX + 20)),
+      Math.max(16, this.viewportWidth - 284)
+    );
+    const top = Math.min(
+      Math.max(72, Math.round(badge.screenY - 24)),
+      Math.max(72, this.viewportHeight - 160)
+    );
+    popoverEl.style.left = `${left}px`;
+    popoverEl.style.top = `${top}px`;
+    popoverEl.classList.add('nf-badge-popover-visible');
+  }
+
   private updateHudState(): void {
     const stateEl = this.root.querySelector('#hud-fsm-state');
     if (stateEl) {
@@ -739,7 +983,168 @@ export class NoteFlowTabletApp {
       const zoomPct = Math.round(this.store.camera.zoom * 100);
       telemetryEl.textContent = `${this.lastPointerType} • p:${this.lastPressure.toFixed(2)} • ${this.lastCoalescedCount}x coal • ${zoomPct}%`;
     }
+
+    // Floating Radial Tool Wheel visibility & coordinates at 1-finger hold anchor or pinned summon anchor
+    const wheelEl = this.root.querySelector<HTMLElement>(
+      '#radial-wheel-overlay'
+    );
+    if (wheelEl) {
+      const activeAnchor =
+        this.bridge.gestureState === 'TOUCH_HOLD_MODIFIER' &&
+        this.bridge.holdAnchor !== null
+          ? this.bridge.holdAnchor
+          : this.pinnedRadialAnchor;
+      if (activeAnchor !== null) {
+        wheelEl.style.left = `${Math.round(activeAnchor.x)}px`;
+        wheelEl.style.top = `${Math.round(activeAnchor.y)}px`;
+        wheelEl.classList.add('nf-radial-wheel-visible');
+      } else {
+        wheelEl.classList.remove('nf-radial-wheel-visible');
+      }
+    }
+
+    // Keep inspected badge popover synced (or close if badge was removed/hidden)
+    if (this.inspectedBadgeId !== null) {
+      const frame = this.store.buildSceneFrame(
+        this.viewportWidth,
+        this.viewportHeight
+      );
+      const currentBadge = frame.badges.find(
+        (b) => b.id === this.inspectedBadgeId
+      );
+      if (currentBadge) {
+        this.syncBadgePopoverDom(currentBadge);
+      } else {
+        this.closeBadgePopover();
+      }
+    }
   }
+}
+
+export const RADIAL_WHEEL_SLICE_OFFSETS: ReadonlyArray<{
+  readonly tool: RadialToolSlot;
+  readonly dx: number;
+  readonly dy: number;
+}> = [
+  { tool: 'fountain_pen', dx: 0, dy: -66 },
+  { tool: 'felt_tip_marker', dx: 57, dy: -33 },
+  { tool: 'ai_highlighter', dx: 57, dy: 33 },
+  { tool: 'freehand_lasso', dx: 0, dy: 66 },
+  { tool: 'stroke_eraser', dx: -57, dy: 33 },
+  { tool: 'pan_laser', dx: -57, dy: -33 },
+];
+
+/**
+ * Polar hit-testing for the 6-slot Radial Tool Wheel relative to `anchor`.
+ * Supports both Hold-Slide-Release marking menu gestures and sticky-wheel slice taps.
+ */
+export function hitTestRadialWheelSlice(
+  anchor: ScreenPoint,
+  cursor: ScreenPoint,
+  minRadius: number = 24,
+  maxRadius: number = 115
+): RadialToolSlot | null {
+  const dx = cursor.x - anchor.x;
+  const dy = cursor.y - anchor.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < minRadius || dist > maxRadius) return null;
+
+  let bestTool: RadialToolSlot | null = null;
+  let bestDistSq = Infinity;
+  for (const slice of RADIAL_WHEEL_SLICE_OFFSETS) {
+    const sdx = dx - slice.dx;
+    const sdy = dy - slice.dy;
+    const dSq = sdx * sdx + sdy * sdy;
+    if (dSq < bestDistSq) {
+      bestDistSq = dSq;
+      bestTool = slice.tool;
+    }
+  }
+  return bestTool;
+}
+
+/**
+ * Synthesizes an Atomic Zettel Card anchored to `badgeId` via `CreateZettelCardCommand`
+ * and records `linkedZettelId` in the badge's `resultJson` so duplicate clicks are idempotent.
+ */
+export function synthesizeZettelForBadge(
+  store: CanvasStore,
+  zettelRepo: ZettelRepository,
+  badgeId: JobId
+): NodeId | null {
+  const badge = store.jobRepo.getBadgeById(badgeId);
+  if (!badge) return null;
+  if (typeof badge.resultJson?.linkedZettelId === 'string') {
+    return null;
+  }
+
+  const aiLayer = store.getLayerByType('ai_feedback');
+  const tooltipMessage =
+    typeof badge.resultJson?.tooltipMessage === 'string'
+      ? badge.resultJson.tooltipMessage
+      : 'Synthesized from verified handwritten cluster.';
+  const rawBadgeState = badge.resultJson?.badgeState;
+  const verificationState =
+    rawBadgeState === 'conflict'
+      ? 'conflict'
+      : rawBadgeState === 'hint_available'
+        ? 'hint'
+        : badge.status === 'completed'
+          ? 'verified'
+          : 'unverified';
+
+  const validatedInput = CreateZettelCardToolSchema.parse({
+    anchorClusterId: badge.anchorNodeId,
+    title: 'Verified Claim Synthesis',
+    summaryMarkdown: tooltipMessage,
+    latexBlocks: [],
+    verificationState,
+    worldPosition: {
+      x: Math.round(badge.anchorX + 24),
+      y: Math.round(badge.anchorY - 12),
+    },
+  });
+
+  const cmd = new CreateZettelCardCommand(store.db, store.nodeRepo, zettelRepo, {
+    canvasId: store.canvasId,
+    layerId: aiLayer.id,
+    toolInput: validatedInput,
+    embedding: null,
+  });
+  store.history.execute(cmd);
+  const createdCardId = cmd.affectedNodeIds[0]!;
+
+  store.jobRepo.updateJobStatus(badge.id, badge.status, {
+    ...(badge.resultJson ?? {}),
+    linkedZettelId: createdCardId,
+  });
+
+  return createdCardId;
+}
+
+/**
+ * Advances an enqueued AI job badge through its runtime lifecycle (`queued` -> `running` -> `completed`)
+ * using strict `UpdateJobBadgeToolSchema` validation on completion.
+ */
+export function advanceBackgroundJobPhase(
+  store: CanvasStore,
+  targetJobId: JobId,
+  phase: 'running' | 'completed'
+): boolean {
+  const current = store.jobRepo.getBadgeById(targetJobId);
+  if (!current) return false;
+
+  if (phase === 'running') {
+    return store.jobQueue.markJobRunning(targetJobId) !== null;
+  }
+
+  const completedUpdate = UpdateJobBadgeToolSchema.parse({
+    jobId: targetJobId,
+    status: 'completed',
+    badgeState: 'verified',
+    tooltipMessage: 'Claim & spatial cluster verified.',
+  });
+  return store.jobQueue.applyToolUpdate(completedUpdate);
 }
 
 export function bootstrapTabletApp(): NoteFlowTabletApp | null {

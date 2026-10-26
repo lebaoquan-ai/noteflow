@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { areStrokeBoxesProximate } from '../../core/canvas/math.js';
 import {
   canvasId,
   layerId,
@@ -241,6 +242,20 @@ export class SpatialNodeRepository {
     return rows.map(parseSpatialNodeRow);
   }
 
+  public getClustersInLayer(
+    targetCanvasId: CanvasId,
+    targetLayerId: LayerId
+  ): SpatialNodeRecord[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM spatial_nodes
+         WHERE canvas_id = ? AND layer_id = ? AND node_type = 'stroke_cluster'
+         ORDER BY created_at ASC`
+      )
+      .all(targetCanvasId, targetLayerId);
+    return rows.map(parseSpatialNodeRow);
+  }
+
   public getChildStrokesOfClusters(clusterIds: readonly NodeId[]): SpatialNodeRecord[] {
     if (clusterIds.length === 0) return [];
     const placeholders = clusterIds.map(() => '?').join(', ');
@@ -268,8 +283,167 @@ export class SpatialNodeRepository {
     });
   }
 
+  public updateClusterBoundsAndTags(
+    clusterId: NodeId,
+    bbox: WorldAABB,
+    strokeCount: number,
+    semanticTags: readonly string[]
+  ): void {
+    const existing = this.getById(clusterId);
+    if (!existing) return;
+    const now = Date.now();
+    const nextContent: Record<string, unknown> = {
+      ...(existing.contentJson ?? {}),
+      strokeCount,
+    };
+    this.db.raw
+      .prepare(
+        `UPDATE spatial_nodes SET min_x = ?, min_y = ?, max_x = ?, max_y = ?, content_json = ?, semantic_tags_json = ?, updated_at = ? WHERE id = ?`
+      )
+      .run(
+        bbox[0],
+        bbox[1],
+        bbox[2],
+        bbox[3],
+        JSON.stringify(nextContent),
+        JSON.stringify(semanticTags),
+        now,
+        clusterId
+      );
+  }
+
   /**
-   * Queries the R-Tree virtual table using the 64-bit integer rowid join.
+   * Re-evaluates each specified `stroke_cluster` after child strokes have been
+   * undone, erased, or sliced:
+   * - If the cluster has 0 remaining child strokes, deletes the cluster node so no
+   *   orphaned dashed boxes remain on the canvas.
+   * - If removing a bridging stroke splits the remaining child strokes into multiple
+   *   disconnected spatial components (> 48px apart), partitions them into separate
+   *   `stroke_cluster` nodes and returns the newly created split cluster IDs.
+   * - Otherwise, recomputes its bounding box, strokeCount, and semanticTags from
+   *   its remaining child strokes.
+   */
+  public pruneOrUpdateParentClusters(
+    clusterIds: readonly NodeId[]
+  ): NodeId[] {
+    const uniqueClusterIds = [...new Set(clusterIds)];
+    if (uniqueClusterIds.length === 0) return [];
+
+    const createdSplitClusterIds: NodeId[] = [];
+
+    this.db.transaction(() => {
+      for (const cId of uniqueClusterIds) {
+        const cluster = this.getById(cId);
+        if (!cluster || cluster.nodeType !== 'stroke_cluster') continue;
+
+        const children = this.getChildStrokesOfClusters([cId]);
+        if (children.length === 0) {
+          this.deleteByIds([cId]);
+          continue;
+        }
+
+        // Partition remaining children into connected components using canonical anisotropic proximity
+        const n = children.length;
+        const parent = Array.from({ length: n }, (_, idx) => idx);
+        const find = (x: number): number => {
+          let root = x;
+          while (parent[root] !== root) root = parent[root]!;
+          let curr = x;
+          while (curr !== root) {
+            const nxt = parent[curr]!;
+            parent[curr] = root;
+            curr = nxt;
+          }
+          return root;
+        };
+        const union = (a: number, b: number): void => {
+          const ra = find(a);
+          const rb = find(b);
+          if (ra !== rb) parent[rb] = ra;
+        };
+
+        for (let i = 0; i < n; i++) {
+          for (let j = i + 1; j < n; j++) {
+            if (areStrokeBoxesProximate(children[i]!.bbox, children[j]!.bbox)) {
+              union(i, j);
+            }
+          }
+        }
+
+        const componentsMap = new Map<number, SpatialNodeRecord[]>();
+        for (let i = 0; i < n; i++) {
+          const r = find(i);
+          let list = componentsMap.get(r);
+          if (!list) {
+            list = [];
+            componentsMap.set(r, list);
+          }
+          list.push(children[i]!);
+        }
+
+        const components = [...componentsMap.values()];
+        const computeBoundsAndTags = (
+          members: readonly SpatialNodeRecord[]
+        ): { bbox: WorldAABB; tags: string[] } => {
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          const tagSet = new Set<string>();
+          for (const child of members) {
+            if (child.bbox[0] < minX) minX = child.bbox[0];
+            if (child.bbox[1] < minY) minY = child.bbox[1];
+            if (child.bbox[2] > maxX) maxX = child.bbox[2];
+            if (child.bbox[3] > maxY) maxY = child.bbox[3];
+            for (const t of child.semanticTags) tagSet.add(t);
+          }
+          return {
+            bbox: worldAABB(minX, minY, maxX, maxY),
+            tags: [...tagSet],
+          };
+        };
+
+        const primaryComp = components[0]!;
+        const primaryStats = computeBoundsAndTags(primaryComp);
+        this.updateClusterBoundsAndTags(
+          cId,
+          primaryStats.bbox,
+          primaryComp.length,
+          primaryStats.tags
+        );
+
+        for (let k = 1; k < components.length; k++) {
+          const splitComp = components[k]!;
+          const splitStats = computeBoundsAndTags(splitComp);
+          const splitClusterId = nodeId(crypto.randomUUID());
+          this.insertNode({
+            id: splitClusterId,
+            canvasId: cluster.canvasId,
+            layerId: cluster.layerId,
+            nodeType: 'stroke_cluster',
+            parentClusterId: null,
+            bbox: splitStats.bbox,
+            strokePoints: null,
+            style: null,
+            contentJson: { strokeCount: splitComp.length },
+            ocrText: null,
+            semanticTags: splitStats.tags,
+          });
+          this.assignNodesToCluster(
+            splitComp.map((s) => s.id),
+            splitClusterId
+          );
+          createdSplitClusterIds.push(splitClusterId);
+        }
+      }
+    });
+
+    return createdSplitClusterIds;
+  }
+
+  /**
+   * Queries the R-Tree virtual table using the 64-bit integer rowid join,
+   * ordered by layer z_index ASC and creation timestamp ASC.
    */
   public queryViewportRTree(
     targetCanvasId: CanvasId,
@@ -281,10 +455,11 @@ export class SpatialNodeRepository {
         `SELECT n.*
          FROM spatial_nodes n
          INNER JOIN spatial_nodes_rtree r ON n.rowid = r.id
+         INNER JOIN layers l ON n.layer_id = l.id
          WHERE n.canvas_id = ?
            AND r.max_x >= ? AND r.min_x <= ?
            AND r.max_y >= ? AND r.min_y <= ?
-         ORDER BY n.created_at ASC`
+         ORDER BY l.z_index ASC, n.created_at ASC, n.id ASC`
       )
       .all(targetCanvasId, vMinX, vMaxX, vMinY, vMaxY);
     return rows.map(parseSpatialNodeRow);

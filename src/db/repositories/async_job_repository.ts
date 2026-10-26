@@ -2,9 +2,11 @@ import { z } from 'zod';
 import {
   canvasId,
   jobId,
+  layerId,
   nodeId,
   type CanvasId,
   type JobId,
+  type LayerId,
   type NodeId,
 } from '../../core/canvas/types.js';
 import type { NoteFlowDatabase } from '../client.js';
@@ -38,12 +40,14 @@ const RawAsyncJobWithAnchorRowSchema = z.object({
   updated_at: z.number().int(),
   anchor_x: z.number().finite(),
   anchor_y: z.number().finite(),
+  anchor_layer_id: z.string().uuid(),
 });
 
 export interface AsyncJobBadgeRecord {
   readonly id: JobId;
   readonly canvasId: CanvasId;
   readonly anchorNodeId: NodeId;
+  readonly anchorLayerId: LayerId;
   readonly jobType: AsyncJobType;
   readonly status: AsyncJobStatus;
   readonly resultJson: Record<string, unknown> | null;
@@ -63,6 +67,7 @@ function parseJobWithAnchorRow(raw: unknown): AsyncJobBadgeRecord {
     id: jobId(row.id),
     canvasId: canvasId(row.canvas_id),
     anchorNodeId: nodeId(row.anchor_node_id),
+    anchorLayerId: layerId(row.anchor_layer_id),
     jobType: row.job_type,
     status: row.status,
     resultJson,
@@ -127,7 +132,7 @@ export class AsyncJobRepository {
   public getBadgeById(id: JobId): AsyncJobBadgeRecord | null {
     const row = this.db.raw
       .prepare(
-        `SELECT j.*, n.max_x AS anchor_x, n.min_y AS anchor_y
+        `SELECT j.*, n.max_x AS anchor_x, n.min_y AS anchor_y, n.layer_id AS anchor_layer_id
          FROM async_jobs j
          INNER JOIN spatial_nodes n ON j.anchor_node_id = n.id
          WHERE j.id = ?`
@@ -140,7 +145,7 @@ export class AsyncJobRepository {
   public getBadgesForCanvas(targetCanvasId: CanvasId): AsyncJobBadgeRecord[] {
     const rows = this.db.raw
       .prepare(
-        `SELECT j.*, n.max_x AS anchor_x, n.min_y AS anchor_y
+        `SELECT j.*, n.max_x AS anchor_x, n.min_y AS anchor_y, n.layer_id AS anchor_layer_id
          FROM async_jobs j
          INNER JOIN spatial_nodes n ON j.anchor_node_id = n.id
          WHERE j.canvas_id = ?
@@ -155,7 +160,7 @@ export class AsyncJobRepository {
     const placeholders = anchorIds.map(() => '?').join(', ');
     const rows = this.db.raw
       .prepare(
-        `SELECT j.*, n.max_x AS anchor_x, n.min_y AS anchor_y
+        `SELECT j.*, n.max_x AS anchor_x, n.min_y AS anchor_y, n.layer_id AS anchor_layer_id
          FROM async_jobs j
          INNER JOIN spatial_nodes n ON j.anchor_node_id = n.id
          WHERE j.anchor_node_id IN (${placeholders})`

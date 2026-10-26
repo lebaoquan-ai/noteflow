@@ -1,5 +1,6 @@
 import {
   screenPoint,
+  type ScreenPoint,
   type WorldPoint,
 } from '../../core/canvas/types.js';
 import { screenToWorld } from '../../core/canvas/math.js';
@@ -35,13 +36,17 @@ interface TrackedTouch {
 export interface TabletPointerBridgeCallbacks {
   readonly onWetRepaint?: () => void;
   readonly onDryRepaint?: () => void;
-  readonly onStateChange?: (state: GestureState) => void;
+  readonly onStateChange?: (
+    state: GestureState,
+    holdAnchor: ScreenPoint | null
+  ) => void;
   readonly onLassoSelection?: (selectedIds: readonly string[]) => void;
 }
 
 export class TabletPointerBridge {
   public readonly wetBuffer = new WetStrokeBuffer();
   private _gestureState: GestureState = 'IDLE';
+  private _holdAnchor: ScreenPoint | null = null;
   private readonly activeTouches = new Map<number, TrackedTouch>();
   private maxConcurrentTouchesInGesture = 0;
   private anyTouchMovedBeyondSlop = false;
@@ -49,6 +54,7 @@ export class TabletPointerBridge {
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPinchDistance: number | null = null;
   private lastPinchCenter: { x: number; y: number } | null = null;
+  private gestureSequenceId = 0;
 
   public constructor(
     private readonly store: CanvasStore,
@@ -59,11 +65,16 @@ export class TabletPointerBridge {
     return this._gestureState;
   }
 
+  public get holdAnchor(): ScreenPoint | null {
+    return this._holdAnchor;
+  }
+
   public handlePointerDown(e: BridgePointerEvent): void {
     const isStylusOrMouse = e.pointerType === 'pen' || e.pointerType === 'mouse';
 
     if (isStylusOrMouse) {
       this.clearHoldTimer();
+      this.gestureSequenceId++;
       this.transition({
         type: 'PEN_DOWN',
         x: e.clientX,
@@ -153,6 +164,7 @@ export class TabletPointerBridge {
       if (
         this._gestureState === 'PEN_DRAWING' &&
         this.store.activeTool === 'stroke_eraser' &&
+        !this.store.activeLayer.isLocked &&
         this.wetBuffer.committedCount >= 2 &&
         prevCount >= 1
       ) {
@@ -178,10 +190,13 @@ export class TabletPointerBridge {
           this.store.canvasId,
           wStart,
           wEnd,
-          8.0 / this.store.camera.zoom
+          8.0 / this.store.camera.zoom,
+          this.gestureSequenceId
         );
         this.store.history.execute(sliceCmd);
-        this.callbacks.onDryRepaint?.();
+        if (sliceCmd.didMutate) {
+          this.callbacks.onDryRepaint?.();
+        }
       }
 
       this.callbacks.onWetRepaint?.();
@@ -307,7 +322,12 @@ export class TabletPointerBridge {
         return;
       }
 
-      const activeLayer = this.store.getLayerByType('notes');
+      const activeLayer = this.store.activeLayer;
+      if (activeLayer.isLocked) {
+        this.callbacks.onDryRepaint?.();
+        return;
+      }
+
       this.store.commitStroke({
         layerId: activeLayer.id,
         points: worldPtsFlat,
@@ -390,7 +410,15 @@ export class TabletPointerBridge {
     const next = gestureReducer(this._gestureState, event);
     if (next !== this._gestureState) {
       this._gestureState = next;
-      this.callbacks.onStateChange?.(next);
+      if (next === 'TOUCH_HOLD_MODIFIER') {
+        const firstTouch = this.activeTouches.values().next().value;
+        this._holdAnchor = firstTouch
+          ? screenPoint(firstTouch.currentX, firstTouch.currentY)
+          : null;
+      } else {
+        this._holdAnchor = null;
+      }
+      this.callbacks.onStateChange?.(next, this._holdAnchor);
     }
   }
 }

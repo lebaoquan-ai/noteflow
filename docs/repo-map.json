@@ -23,7 +23,7 @@
         },
         {
           "path": "src/core/commands/canvas_command.ts",
-          "exports": ["CanvasCommand", "CommitStrokeCommand", "MoveNodesCommand", "EraseNodesCommand", "CommandHistory"],
+          "exports": ["CanvasCommand", "CommitStrokeCommand", "ClusterStrokesCommand", "MoveNodesCommand", "EraseNodesCommand", "CommandHistory"],
           "testFile": "tests/headless/canvas_commands.test.ts"
         },
         {
@@ -135,7 +135,8 @@
         },
         {
           "path": "src/ui/tablet_app.ts",
-          "exports": ["NoteFlowTabletApp", "bootstrapTabletApp"]
+          "exports": ["NoteFlowTabletApp", "advanceBackgroundJobPhase", "bootstrapTabletApp"],
+          "testFile": "tests/headless/code_review_violations.test.ts"
         }
       ]
     }

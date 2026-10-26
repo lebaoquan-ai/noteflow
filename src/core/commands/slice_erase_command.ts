@@ -52,8 +52,12 @@ function pointToSegmentDist(
 export class SliceEraseCommand implements CanvasCommand {
   public readonly kind = 'SLICE_ERASE';
   private deletedSnapshots: SpatialNodeRecord[] = [];
-  private createdFragmentIds: NodeId[] = [];
+  private parentClusterSnapshots: SpatialNodeRecord[] = [];
+  private siblingStrokeSnapshots: SpatialNodeRecord[] = [];
+  private splitClusterIdsCreated: NodeId[] = [];
+  private createdFragments: SpatialNodeRecord[] = [];
   private _affectedNodeIds: NodeId[] = [];
+  private hasExecutedOnce = false;
 
   public constructor(
     private readonly db: NoteFlowDatabase,
@@ -61,14 +65,39 @@ export class SliceEraseCommand implements CanvasCommand {
     private readonly canvasId: CanvasId,
     private readonly bladeStart: WorldPoint,
     private readonly bladeEnd: WorldPoint,
-    private readonly eraserRadius: number = 4.0
+    private readonly eraserRadius: number = 4.0,
+    public readonly gestureId?: number
   ) {}
 
   public get affectedNodeIds(): readonly NodeId[] {
     return this._affectedNodeIds;
   }
 
+  public get didMutate(): boolean {
+    return this.deletedSnapshots.length > 0;
+  }
+
   public execute(): void {
+    if (this.hasExecutedOnce) {
+      this.db.transaction(() => {
+        const strokeIdsToDelete = this.deletedSnapshots.map((s) => s.id);
+        if (strokeIdsToDelete.length > 0) {
+          this.repo.deleteByIds(strokeIdsToDelete);
+        }
+        if (this.createdFragments.length > 0) {
+          this.repo.restoreSnapshots(this.createdFragments);
+        }
+        const parentClusterIds = this.parentClusterSnapshots.map((c) => c.id);
+        if (parentClusterIds.length > 0) {
+          this.splitClusterIdsCreated =
+            this.repo.pruneOrUpdateParentClusters(parentClusterIds);
+        } else {
+          this.splitClusterIdsCreated = [];
+        }
+      });
+      return;
+    }
+
     const minX = Math.min(this.bladeStart.x, this.bladeEnd.x) - this.eraserRadius;
     const minY = Math.min(this.bladeStart.y, this.bladeEnd.y) - this.eraserRadius;
     const maxX = Math.max(this.bladeStart.x, this.bladeEnd.x) + this.eraserRadius;
@@ -79,73 +108,113 @@ export class SliceEraseCommand implements CanvasCommand {
       .filter((n) => n.nodeType === 'vector_stroke' && n.strokePoints !== null);
 
     this.deletedSnapshots = [];
-    this.createdFragmentIds = [];
+    this.parentClusterSnapshots = [];
+    this.siblingStrokeSnapshots = [];
+    this.splitClusterIdsCreated = [];
+    this.createdFragments = [];
     this._affectedNodeIds = [];
 
-    this.db.transaction(() => {
-      for (const stroke of candidates) {
-        const pts = stroke.strokePoints!;
-        const numPts = Math.floor(pts.length / 4);
-        if (numPts === 0) continue;
+    if (candidates.length === 0) {
+      this.hasExecutedOnce = true;
+      return;
+    }
 
-        const subChains: number[][] = [];
-        let currentChain: number[] = [];
-        let wasCut = false;
+    const plannedSplits: Array<{
+      stroke: SpatialNodeRecord;
+      subChains: number[][];
+    }> = [];
 
-        for (let i = 0; i < numPts; i++) {
-          const x = pts[i * 4]!;
-          const y = pts[i * 4 + 1]!;
-          const p = pts[i * 4 + 2]!;
-          const t = pts[i * 4 + 3]!;
+    for (const stroke of candidates) {
+      const pts = stroke.strokePoints!;
+      const numPts = Math.floor(pts.length / 4);
+      if (numPts === 0) continue;
 
-          const pointHit =
-            pointToSegmentDist(
-              x,
-              y,
-              this.bladeStart.x,
-              this.bladeStart.y,
-              this.bladeEnd.x,
-              this.bladeEnd.y
-            ) <= this.eraserRadius;
+      const subChains: number[][] = [];
+      let currentChain: number[] = [];
+      let wasCut = false;
 
-          if (pointHit) {
+      for (let i = 0; i < numPts; i++) {
+        const x = pts[i * 4]!;
+        const y = pts[i * 4 + 1]!;
+        const p = pts[i * 4 + 2]!;
+        const t = pts[i * 4 + 3]!;
+
+        const pointHit =
+          pointToSegmentDist(
+            x,
+            y,
+            this.bladeStart.x,
+            this.bladeStart.y,
+            this.bladeEnd.x,
+            this.bladeEnd.y
+          ) <= this.eraserRadius;
+
+        if (pointHit) {
+          wasCut = true;
+          if (currentChain.length > 0) {
+            subChains.push(currentChain);
+            currentChain = [];
+          }
+          continue;
+        }
+
+        currentChain.push(x, y, p, t);
+
+        if (i < numPts - 1) {
+          const nx = pts[(i + 1) * 4]!;
+          const ny = pts[(i + 1) * 4 + 1]!;
+          const segHit = segmentsIntersect(
+            x,
+            y,
+            nx,
+            ny,
+            this.bladeStart.x,
+            this.bladeStart.y,
+            this.bladeEnd.x,
+            this.bladeEnd.y
+          );
+          if (segHit) {
             wasCut = true;
-            if (currentChain.length > 0) {
-              subChains.push(currentChain);
-              currentChain = [];
-            }
-            continue;
-          }
-
-          currentChain.push(x, y, p, t);
-
-          if (i < numPts - 1) {
-            const nx = pts[(i + 1) * 4]!;
-            const ny = pts[(i + 1) * 4 + 1]!;
-            const segHit = segmentsIntersect(
-              x,
-              y,
-              nx,
-              ny,
-              this.bladeStart.x,
-              this.bladeStart.y,
-              this.bladeEnd.x,
-              this.bladeEnd.y
-            );
-            if (segHit) {
-              wasCut = true;
-              subChains.push(currentChain);
-              currentChain = [];
-            }
+            subChains.push(currentChain);
+            currentChain = [];
           }
         }
+      }
 
-        if (currentChain.length > 0) {
-          subChains.push(currentChain);
-        }
+      if (currentChain.length > 0) {
+        subChains.push(currentChain);
+      }
 
-        if (!wasCut) continue;
+      if (wasCut) {
+        plannedSplits.push({ stroke, subChains });
+      }
+    }
 
+    if (plannedSplits.length === 0) {
+      this.hasExecutedOnce = true;
+      return;
+    }
+
+    const affectedClusterIds = new Set<NodeId>();
+    const plannedStrokeIds = new Set<NodeId>();
+    for (const { stroke } of plannedSplits) {
+      plannedStrokeIds.add(stroke.id);
+      if (stroke.parentClusterId) {
+        affectedClusterIds.add(stroke.parentClusterId);
+      }
+    }
+
+    this.db.transaction(() => {
+      if (affectedClusterIds.size > 0) {
+        this.parentClusterSnapshots = this.repo.getByIds([
+          ...affectedClusterIds,
+        ]);
+        this.siblingStrokeSnapshots = this.repo
+          .getChildStrokesOfClusters([...affectedClusterIds])
+          .filter((c) => !plannedStrokeIds.has(c.id));
+      }
+
+      for (const { stroke, subChains } of plannedSplits) {
         this.deletedSnapshots.push(stroke);
         this._affectedNodeIds.push(stroke.id);
         this.repo.deleteByIds([stroke.id]);
@@ -162,7 +231,7 @@ export class SliceEraseCommand implements CanvasCommand {
           const fragId = nodeId(crypto.randomUUID());
           const fragBbox = computeStrokeAABB(fragmentPts, style.width);
 
-          this.repo.insertNode({
+          const insertedFrag = this.repo.insertNode({
             id: fragId,
             canvasId: stroke.canvasId,
             layerId: stroke.layerId,
@@ -177,19 +246,107 @@ export class SliceEraseCommand implements CanvasCommand {
             createdAt: stroke.createdAt,
             updatedAt: Date.now(),
           });
-          this.createdFragmentIds.push(fragId);
+          this.createdFragments.push(insertedFrag);
+        }
+      }
+
+      if (affectedClusterIds.size > 0) {
+        this.splitClusterIdsCreated = this.repo.pruneOrUpdateParentClusters([
+          ...affectedClusterIds,
+        ]);
+        for (const cId of affectedClusterIds) {
+          if (!this._affectedNodeIds.includes(cId)) {
+            this._affectedNodeIds.push(cId);
+          }
         }
       }
     });
+
+    this.hasExecutedOnce = true;
+  }
+
+  public tryMergeWith(next: CanvasCommand): boolean {
+    if (
+      !(next instanceof SliceEraseCommand) ||
+      this.gestureId === undefined ||
+      next.gestureId !== this.gestureId
+    ) {
+      return false;
+    }
+
+    const existingClusterIds = new Set(this.parentClusterSnapshots.map((c) => c.id));
+    for (const c of next.parentClusterSnapshots) {
+      if (!existingClusterIds.has(c.id)) {
+        existingClusterIds.add(c.id);
+        this.parentClusterSnapshots.push(c);
+      }
+    }
+
+    const createdFragMap = new Map(this.createdFragments.map((f) => [f.id, f]));
+    const existingDeletedIds = new Set(this.deletedSnapshots.map((s) => s.id));
+    const siblingMap = new Map(this.siblingStrokeSnapshots.map((s) => [s.id, s]));
+
+    for (const deleted of next.deletedSnapshots) {
+      if (createdFragMap.has(deleted.id)) {
+        // Intermediate fragment created earlier in the same drag was sliced again
+        createdFragMap.delete(deleted.id);
+      } else if (!existingDeletedIds.has(deleted.id)) {
+        existingDeletedIds.add(deleted.id);
+        this.deletedSnapshots.push(deleted);
+        siblingMap.delete(deleted.id);
+      }
+    }
+
+    for (const sib of next.siblingStrokeSnapshots) {
+      if (
+        !siblingMap.has(sib.id) &&
+        !existingDeletedIds.has(sib.id) &&
+        !createdFragMap.has(sib.id)
+      ) {
+        siblingMap.set(sib.id, sib);
+      }
+    }
+    this.siblingStrokeSnapshots = [...siblingMap.values()];
+
+    for (const frag of next.createdFragments) {
+      createdFragMap.set(frag.id, frag);
+    }
+    this.createdFragments = [...createdFragMap.values()];
+
+    for (const splitId of next.splitClusterIdsCreated) {
+      if (!this.splitClusterIdsCreated.includes(splitId)) {
+        this.splitClusterIdsCreated.push(splitId);
+      }
+    }
+
+    for (const id of next._affectedNodeIds) {
+      if (!this._affectedNodeIds.includes(id)) {
+        this._affectedNodeIds.push(id);
+      }
+    }
+
+    return true;
   }
 
   public undo(): void {
     this.db.transaction(() => {
-      if (this.createdFragmentIds.length > 0) {
-        this.repo.deleteByIds(this.createdFragmentIds);
+      if (this.splitClusterIdsCreated.length > 0) {
+        this.repo.deleteByIds(this.splitClusterIdsCreated);
+        this.splitClusterIdsCreated = [];
       }
-      if (this.deletedSnapshots.length > 0) {
-        this.repo.restoreSnapshots(this.deletedSnapshots);
+      if (this.createdFragments.length > 0) {
+        this.repo.deleteByIds(this.createdFragments.map((f) => f.id));
+      }
+      if (
+        this.parentClusterSnapshots.length > 0 ||
+        this.siblingStrokeSnapshots.length > 0 ||
+        this.deletedSnapshots.length > 0
+      ) {
+        this.repo.restoreSnapshots([
+          ...this.parentClusterSnapshots,
+          ...this.siblingStrokeSnapshots,
+          ...this.deletedSnapshots,
+        ]);
       }
     });
   }

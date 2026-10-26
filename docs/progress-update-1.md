@@ -1,8 +1,8 @@
 # NoteFlow — Progress Update #1 & Collaborator Onboarding Guide
 
 **Date:** October 26, 2026  
-**Status:** Phases 0, 1, 2, and 3 Core Complete + Interactive Tablet Proof-of-Concept Prototype Ready  
-**Verification Gate:** `npm run typecheck` (0 errors) • `npm run test:headless` (12 test suites, 51/51 tests passing in ~450ms) • `npm run build` (clean 31 kB gzipped bundle)
+**Status:** Phases 0–3 Core Engine + Phase 4A Engine Hardening + Phase 4B Interactive Tablet HUD Overlays + Phase 4C Critical Review Remediation Complete  
+**Verification Gate:** `npm run typecheck` (0 errors) • `npm run test:headless` (13 test suites, 64/64 tests passing in ~800ms) • `npm run build` (clean ~36.9 kB gzipped bundle)
 
 Welcome to **NoteFlow**! This document summarizes everything built so far, explains how the architecture works under the hood, and gives you a clear roadmap to navigate, extend, and collaborate on the codebase.
 
@@ -33,7 +33,7 @@ npm install
 # 2. Run strict TypeScript compiler check (must always be 0 errors)
 npm run typecheck
 
-# 3. Run the 51 headless unit & property-based tests (~450ms, no browser required)
+# 3. Run the 60 headless unit & property-based tests (~880ms, no browser required)
 npm run test:headless
 
 # 4. Launch the interactive Proof-of-Concept Tablet Server (accessible over Wi-Fi LAN)
@@ -52,20 +52,21 @@ When you run `npm run dev`, Vite prints a `Network:` URL (e.g., `http://192.168.
   - **2-Finger Pinch:** Zoom around the pinch focal point (`0.1x` – `10.0x`).
   - **2-Finger Tap:** Instant Undo.
   - **3-Finger Tap:** Instant Redo.
-  - **1-Finger Hold (220ms) + Stylus Drag:** Bimanual **Magic Lasso** (`TOUCH_HOLD_PEN_LASSOING`) without switching tools.
+  - **1-Finger Hold (220ms):** Summons the **Floating 6-Slot Radial Tool Wheel** centered at your finger's hold coordinates (`TOUCH_HOLD_MODIFIER`), or drag with the stylus while holding to trigger **Bimanual Magic Lasso** (`TOUCH_HOLD_PEN_LASSOING`) without switching tools.
+- **● / ↻ Clickable AI Status Badges:** Tap any `◌ / ↻ / ●` status badge anchored to a stroke cluster to open the **AI Badge Inspection Popover** (showing verification state, tooltip message, and a 1-tap **⚛ Synthesize Linked Zettel Card** button that executes an undoable `CreateZettelCardCommand`).
 - **✂️ Slice Eraser:** Drag across existing strokes to mathematically split intersected polylines into sub-strokes (and hit Undo to restore the original unbroken stroke).
 - **🎓 Teaching Mode + 📤 Export SVG:** Toggle Teaching Mode in the top bar to hide Layer 2 (`Scratchpad`) and Layer 3 (`AI Verify`), then click **Export SVG** to download a clean lecture handout.
 
 ---
 
-## 3. Summary of Progress (Phases 0 – 3 Complete)
+## 3. Summary of Progress (Core Engine Complete vs. Production Integrations Pending)
 
-| Phase | Milestone Scope (`docs/SPEC.md` §7) | Status | Key Modules & Verification Tests |
-| :--- | :--- | :---: | :--- |
-| **Phase 0** | **Ink Foundation & Product Kernel:** Branded 2D math, Bimanual Gesture FSM, SQLite R-Tree schema & triggers, `<4ms` Wet/Dry Scene Graph, Tier-0 Spatial Union-Find Clustering, `◌ → ↻ → ●` Async Badge loop | ✅ **Done** | `gesture_fsm.ts`, `math.ts`, `schema.sql`, `wet_ink_buffer.ts`, `stroke_clusterer.ts`, `async_job_queue.ts` (`38 headless tests`) |
-| **Phase 1** | **Core Note-Taking, Smart Layers, Lasso & Zettelkasten:** 4 Smart Layers, Ray-casting Freehand Lasso hit-testing, Circle-to-Action, `SliceEraseCommand`, Atomic Zettel Cards + 768-dim vector search | ✅ **Done** | `canvas_store.ts`, `slice_erase_command.ts`, `zettel_repository.ts`, `zettel_commands.ts` (`6 headless tests`) |
-| **Phase 2** | **Handwritten Math & Split-Screen PDF Citations:** `CompileMathBlockCommand` (dual handwritten/typeset LaTeX nodes) and `DragToCiteCommand` (provenance-linked PDF excerpts) | ✅ **Done** | `math_and_media_commands.ts` (`2 headless tests`) |
-| **Phase 3** | **Zettel Graph, Ghost Links, Teaching Mode & Artboard Export:** Semantic Ghost Link discovery (`discoverGhostLinks`), undoable `LinkZettelsCommand`, 1-tap Teaching Mode filter, SVG Artboard Exporter, and Tablet PoC UI | ✅ **Done** | `artboard_exporter.ts`, `pointer_bridge.ts`, `canvas_renderer.ts`, `tablet_app.ts` (`5 headless tests`) |
+| Phase | Milestone Scope (`docs/SPEC.md` §7) | Core Engine & Commands | Production UI / AI Integration | Key Modules & Verification Tests |
+| :--- | :--- | :---: | :---: | :--- |
+| **Phase 0** | **Ink Foundation & Product Kernel:** Branded 2D math, Bimanual Gesture FSM, SQLite R-Tree schema & triggers, `<4ms` Wet/Dry Scene Graph, Tier-0 Spatial Union-Find Clustering (with incremental cluster merging), `◌ → ↻ → ●` Async Badge loop | ✅ **Done** | ✅ **Live in Tablet PoC** (Simulated timer worker) | `gesture_fsm.ts`, `math.ts`, `schema.sql`, `wet_ink_buffer.ts`, `stroke_clusterer.ts`, `async_job_queue.ts` |
+| **Phase 1** | **Core Note-Taking, Smart Layers, Lasso & Zettelkasten:** 4 Smart Layers (`z_index` ordering, `isLocked`, `opacity`), Ray-casting Freehand Lasso, undoable Circle-to-Action (`ClusterStrokesCommand`), coalesced `SliceEraseCommand`, Atomic Zettel Cards + 768-dim cosine search | ✅ **Done** | ✅ **Done (Phase 4B):** Floating 6-slot radial wheel at touch hold point & AI badge inspect popovers (`⏳ Pending`: `[ ]` / `@date` task agenda UI) | `canvas_store.ts`, `slice_erase_command.ts`, `zettel_repository.ts`, `zettel_commands.ts`, `tablet_app.ts` |
+| **Phase 2** | **Handwritten Math & Split-Screen PDF Citations:** `CompileMathBlockCommand` (dual handwritten/typeset LaTeX nodes) and `DragToCiteCommand` (provenance-linked PDF excerpts) | ✅ **Done** | ⏳ **Pending:** Embedded `pdf.js` split-screen drawer, KaTeX DOM/SVG math renderer, Tier 1–3 ONNX/VLM workers | `math_and_media_commands.ts` |
+| **Phase 3** | **Zettel Graph, Ghost Links, Teaching Mode & Artboard Export:** Semantic Ghost Link discovery (`discoverGhostLinks`), undoable `LinkZettelsCommand`, 1-tap Teaching Mode filter, SVG Artboard Exporter, and Tablet PoC UI | ✅ **Done** | ⏳ **Pending:** Interactive Socratic Atomizer popover dialogue & Ghost Link accept/dismiss UI | `artboard_exporter.ts`, `pointer_bridge.ts`, `canvas_renderer.ts`, `tablet_app.ts`, `code_review_violations.test.ts` |
 
 ---
 
@@ -97,7 +98,9 @@ noteflow/
 │   ├── SPEC.md                      # Master Product & System Architecture Specification
 │   ├── ARCHITECTURE.md              # Layer dependency DAG & extension seams
 │   ├── repo-map.json                # Machine-readable module & test mapping
-│   └── progress-update-1.md         # This onboarding & progress guide
+│   ├── progress-update-1.md         # This onboarding & progress guide
+│   ├── phase4ab-implementation-plan.md # Phase 4A/4B Technical Implementation Plan
+│   └── phase4ab-walkthrough.md      # Phase 4A/4B Verification & Walkthrough Report
 ├── .agents/skills/                  # 6 Domain Engineering Playbooks (TDD, R-Tree, Math, Ink, Simulator, Debugging)
 ├── src/
 │   ├── core/
@@ -133,7 +136,7 @@ noteflow/
 │           ├── pointer_bridge.ts    # Connects PointerEvents (coalesced/predicted) to gesture_fsm & CanvasStore
 │           ├── canvas_renderer.ts   # Dual-<canvas> renderer (desynchronized wet overlay + unified dry scene graph)
 │           └── artboard_exporter.ts # Phase 3 vector SVG Artboard exporter (respects Teaching Mode)
-└── tests/headless/                  # 12 fast headless test suites (51 tests total)
+└── tests/headless/                  # 13 fast headless test suites (60 tests total)
 ```
 
 ---
@@ -189,5 +192,34 @@ Here are the highest-leverage areas where a newcomer can jump right in:
    - Connect `AsyncJobQueue` (`cluster_ocr`, `verify_claim`, `compile_latex`, `synthesize_zettel`) to an ONNX Runtime Web / WebGPU OCR worker and LLM API endpoint using the validated Zod tool contracts in `src/ai/agent_contract.ts`.
 3. **Interactive Split-Screen PDF Reader Drawer (`src/ui/pdf_drawer/`):**
    - Embed `pdf.js` in a collapsible left/right split drawer so users can select real PDF paragraphs/figures and drag them onto the canvas via `DragToCiteCommand`.
-4. **Phase 4 Performance Sprint (10,000+ Vector Strokes):**
-   - Add spatial tile caching (`OffscreenCanvas` 512×512 world tiles) in `DualCanvasRenderer` and benchmark 10,000+ strokes at 120fps.
+---
+
+## 8. Architectural Decisions & Answers to Newcomer Review Questions
+
+### Q1. UI & Renderer Stack: Vanilla TS + Canvas2D vs. React 19 + WebGL2/Skia?
+- **Decision:** Keep the **hot wet/dry canvas rendering pipeline (`WetStrokeBuffer`, `TabletPointerBridge`, `DualCanvasRenderer`) in zero-allocation Vanilla TypeScript + Canvas2D** (with `OffscreenCanvas` tile caching in Phase 4), and introduce **lightweight UI components (or React 19 overlays)** strictly for **non-canvas chrome & floating HUDs** (the radial tool wheel at the touch hold coordinate, badge verification popovers, Socratic Atomizer dialogues, and the `pdf.js` split-screen reader drawer).
+- **Why:** High-frequency 120Hz/240Hz stylus input (`getCoalescedEvents` / `getPredictedEvents`) must never wait on React reconciliation. Keeping the canvas scene graph in pure TypeScript guarantees `<4ms` wet-ink latency while letting HUD overlays evolve independently.
+
+### Q2. Source of Truth on Schema & Contracts (`schema.sql` & `agent_contract.ts` vs. `SPEC.md`)?
+- **Decision:** **`src/db/schema.sql` and `src/ai/agent_contract.ts` are the canonical source of truth.**
+- **Why:**
+  1. Using `semantic_tags_json` (`JSON string[]`) on `spatial_nodes` allows a single `stroke_cluster` to carry multiple semantic tags (`["noir", "violet"]`) when a user highlights existing noir notes with a violet stroke, whereas a single `semantic_tag TEXT` column could only represent one tag.
+  2. Using `status: 'completed' | 'failed'` + `badgeState: 'verified' | 'conflict' | 'hint_available'` + `tooltipMessage` on `UpdateJobBadgeToolSchema` cleanly separates the **job execution state** (`queued` → `running` → `completed | failed`) from the **epistemic verification outcome** (`verified | conflict | hint_available`).
+
+### Q3. Synchronous `SqlEnginePort` vs. Web Worker OPFS SQLite?
+- **Decision:** **Option A (Write-Behind Dual Engine)** — keep the synchronous main-thread `BrowserSqlEngine` (now backed by `SpatialGridIndex` and full transaction/savepoint rollback snapshots) as the **Main-Thread Hot Spatial Cache** for instant 0ms hit-testing (`pointermove` Slice Eraser, Lasso, and 120fps `buildSceneFrame`), and mirror committed transactions asynchronously to a Web Worker running `@sqlite.org/sqlite-wasm` + OPFS for durable disk persistence and heavy background queries.
+- **Why:** As documented in `.agents/skills/spatial-rtree-sqlite/SKILL.md`, awaiting an asynchronous Worker `postMessage` round-trip inside a 120Hz `pointermove` or `requestAnimationFrame` loop causes frame drops and race conditions. Dual-engine write-behind gives us both 0ms synchronous spatial reads on the UI thread and durable SQLite OPFS storage in the Worker.
+
+### Q4. Incremental Stroke Clustering Strategy?
+- **Decision:** **Incremental Cluster Merging + Automatic Parent Cluster Pruning & Disconnection Partitioning on Undo/Erase** (implemented in `Tier0StrokeClusterer`, `ClusterStrokesCommand`, `CommitStrokeCommand`, `EraseNodesCommand`, and `SliceEraseCommand`).
+- **How it works now:**
+  1. `Tier0StrokeClusterer.clusterLayerNow()` loads both unclustered strokes (`getUnclusteredStrokesInLayer`) AND existing clusters (`getClustersInLayer`) and runs Union-Find over both using `areBoxesSpatiallyProximate` (`CLUSTER_MAX_GAP_X = 48`, `CLUSTER_MAX_GAP_Y = 24`).
+  2. If new strokes are proximate to an existing `stroke_cluster`, they merge into that cluster via `ClusterStrokesCommand` (expanding its AABB, updating `strokeCount` and `semanticTags`, merging any bridged clusters, and superseding/cancelling stale badge jobs before enqueuing a fresh `verify_claim` badge).
+  3. When any stroke is undone (`CommitStrokeCommand.undo()`), erased (`EraseNodesCommand`), or sliced (`SliceEraseCommand`), `SpatialNodeRepository.pruneOrUpdateParentClusters()` automatically deletes any `stroke_cluster` that has 0 remaining child strokes, shrinks its AABB to fit remaining strokes, and partitions disconnected stroke components (`> 48px` apart) back into separate `stroke_cluster` nodes with full Undo/Redo symmetry.
+
+### Q5. Where Should We Start Together?
+Our recommended priority order for upcoming collaboration:
+1. **Track 1 (Interactive HUD Overlays) — ✅ COMPLETE (Phase 4A & 4B):**
+   - Floating 6-slot Radial Tool Wheel at the 1-finger hold coordinate (`TOUCH_HOLD_MODIFIER`) and clickable `● / ↻` AI Badge Inspection Popovers with 1-tap undoable Zettel Card synthesis (`CreateZettelCardCommand`). See [`docs/phase4ab-walkthrough.md`](./phase4ab-walkthrough.md).
+2. **Track 2 (Storage — Next Up):** Web Worker OPFS Write-Behind Bridge (`src/db/worker_opfs_bridge.ts`) so canvas sessions persist across tablet browser reloads.
+3. **Track 3 (AI & PDF — Next Up):** Web Worker Tier-1 OCR / Tier-3 VLM integration and the collapsible `pdf.js` Split-Screen Reader Drawer wired to `DragToCiteCommand`.

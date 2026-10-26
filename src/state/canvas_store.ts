@@ -25,6 +25,7 @@ import {
 } from '../core/canvas/math.js';
 import {
   CommitStrokeCommand,
+  ClusterStrokesCommand,
   CommandHistory,
 } from '../core/commands/canvas_command.js';
 import { NoteFlowDatabase } from '../db/client.js';
@@ -77,6 +78,7 @@ export interface UnifiedSceneFrame {
   readonly worldViewport: WorldAABB;
   readonly visibleNodes: readonly SpatialNodeRecord[];
   readonly badges: readonly ProjectedJobBadge[];
+  readonly layers?: ReadonlyMap<LayerId, SmartLayerState>;
 }
 
 export class CanvasStore {
@@ -90,6 +92,7 @@ export class CanvasStore {
 
   private _camera: CameraState = { panX: 0, panY: 0, zoom: 1.0, rotation: 0 };
   private _activeTool: RadialToolSlot = 'fountain_pen';
+  private _activeLayerType: LayerType = 'notes';
   private _strokeStyle: StrokeStyle = {
     colorId: 'noir',
     width: 2.8,
@@ -97,6 +100,7 @@ export class CanvasStore {
   };
   private _isTeachingMode = false;
   private readonly layersByType = new Map<LayerType, SmartLayerState>();
+  private readonly layersById = new Map<LayerId, SmartLayerState>();
 
   public constructor(db: NoteFlowDatabase, title: string) {
     this.db = db;
@@ -107,6 +111,23 @@ export class CanvasStore {
     this.history = new CommandHistory({
       onCancelJobsForNodes: (ids) => {
         this.jobQueue.cancelJobsForNodes(ids);
+      },
+      onRedoCommand: (command) => {
+        if (command instanceof CommitStrokeCommand) {
+          if (command.restoredClusterId) {
+            this.clusterer.ensureClusterBadgeIfViolet(
+              this.canvasId,
+              command.restoredClusterId
+            );
+          } else {
+            this.clusterer.notifyStrokeCommitted({
+              strokeId: command.params.id,
+              canvasId: command.params.canvasId,
+              layerId: command.params.layerId,
+              colorId: command.params.style.colorId,
+            });
+          }
+        }
       },
     });
     this.canvasId = canvasId(crypto.randomUUID());
@@ -136,7 +157,7 @@ export class CanvasStore {
         layerType: def.layerType,
         zIndex: def.zIndex,
       });
-      this.layersByType.set(def.layerType, {
+      const state: SmartLayerState = {
         id,
         name: def.name,
         layerType: def.layerType,
@@ -144,7 +165,9 @@ export class CanvasStore {
         isVisible: true,
         isLocked: false,
         opacity: 1.0,
-      });
+      };
+      this.layersByType.set(def.layerType, state);
+      this.layersById.set(id, state);
     }
   }
 
@@ -160,6 +183,10 @@ export class CanvasStore {
     return this._activeTool;
   }
 
+  public get activeLayer(): SmartLayerState {
+    return this.layersByType.get(this._activeLayerType)!;
+  }
+
   public get strokeStyle(): StrokeStyle {
     return this._strokeStyle;
   }
@@ -172,8 +199,29 @@ export class CanvasStore {
     return this.layersByType.get(type)!;
   }
 
+  public getLayerById(id: LayerId): SmartLayerState | undefined {
+    return this.layersById.get(id);
+  }
+
   public getAllLayers(): readonly SmartLayerState[] {
     return [...this.layersByType.values()].sort((a, b) => a.zIndex - b.zIndex);
+  }
+
+  public setActiveLayer(type: LayerType): void {
+    if (!this.layersByType.has(type)) {
+      throw new Error(`Unknown layer type: ${type}`);
+    }
+    this._activeLayerType = type;
+  }
+
+  public setLayerLocked(type: LayerType, locked: boolean): void {
+    const layer = this.getLayerByType(type);
+    layer.isLocked = locked;
+  }
+
+  public setLayerOpacity(type: LayerType, opacity: number): void {
+    const layer = this.getLayerByType(type);
+    layer.opacity = Math.max(0, Math.min(1, opacity));
   }
 
   public setStrokeColor(colorId: StrokeStyle['colorId']): void {
@@ -248,6 +296,11 @@ export class CanvasStore {
     points: Float32Array;
     style?: StrokeStyle;
   }): NodeId {
+    const targetLayer = this.layersById.get(params.layerId);
+    if (targetLayer?.isLocked) {
+      throw new Error(`Cannot commit stroke to locked layer "${targetLayer.name}".`);
+    }
+
     const newId = nodeId(crypto.randomUUID());
     const style = params.style ?? this._strokeStyle;
     const bbox = computeStrokeAABB(params.points, style.width);
@@ -311,31 +364,65 @@ export class CanvasStore {
     );
     const visibleNodes = rtreeNodes.filter((n) => visibleLayerIds.has(n.layerId));
 
-    const rawBadges = this.jobRepo.getBadgesForCanvas(this.canvasId);
-    const badges: ProjectedJobBadge[] = rawBadges.map((b) => {
-      const screenPos = worldToScreen(
-        worldPoint(b.anchorX, b.anchorY),
-        this._camera
-      );
-      return {
-        id: b.id,
-        anchorNodeId: b.anchorNodeId,
-        jobType: b.jobType,
-        status: b.status,
-        worldAnchorX: b.anchorX,
-        worldAnchorY: b.anchorY,
-        screenX: screenPos.x,
-        screenY: screenPos.y,
-        resultJson: b.resultJson,
-      };
-    });
+    const aiFeedbackVisible =
+      this.layersByType.get('ai_feedback')?.isVisible ?? true;
+    const rawBadges = aiFeedbackVisible
+      ? this.jobRepo.getBadgesForCanvas(this.canvasId)
+      : [];
+    const badges: ProjectedJobBadge[] = rawBadges
+      .filter((b) => visibleLayerIds.has(b.anchorLayerId))
+      .map((b) => {
+        const screenPos = worldToScreen(
+          worldPoint(b.anchorX, b.anchorY),
+          this._camera
+        );
+        return {
+          id: b.id,
+          anchorNodeId: b.anchorNodeId,
+          jobType: b.jobType,
+          status: b.status,
+          worldAnchorX: b.anchorX,
+          worldAnchorY: b.anchorY,
+          screenX: screenPos.x,
+          screenY: screenPos.y,
+          resultJson: b.resultJson,
+        };
+      });
 
     return {
       camera: { ...this._camera },
       worldViewport,
       visibleNodes,
       badges,
+      layers: new Map(
+        [...this.layersById.entries()].map(([k, v]) => [k, { ...v }])
+      ),
     };
+  }
+
+  /**
+   * Hit-tests projected AI status badges in screen space.
+   * Matches the rendered badge center offset `(screenX + 8, screenY - 8)` in `DualCanvasRenderer`.
+   */
+  public hitTestBadgeAtScreenPoint(
+    pt: ScreenPoint,
+    viewportWidth: number,
+    viewportHeight: number,
+    hitRadiusPx: number = 18
+  ): ProjectedJobBadge | null {
+    const frame = this.buildSceneFrame(viewportWidth, viewportHeight);
+    let closest: ProjectedJobBadge | null = null;
+    let bestDist = hitRadiusPx;
+    for (const badge of frame.badges) {
+      const cx = badge.screenX + 8;
+      const cy = badge.screenY - 8;
+      const dist = Math.hypot(pt.x - cx, pt.y - cy);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        closest = badge;
+      }
+    }
+    return closest;
   }
 
   /**
@@ -386,8 +473,8 @@ export class CanvasStore {
 
   /**
    * Circle-to-Action Gesture (`docs/SPEC.md` §5.2):
-   * Immediately clusters the lassoed strokes (0ms debounce) and enqueues the
-   * requested AI synthesis/verification job.
+   * Immediately clusters the lassoed strokes (0ms debounce) through an undoable
+   * `ClusterStrokesCommand` and enqueues the requested AI synthesis/verification job.
    */
   public triggerCircleToAction(
     polygon: readonly WorldPoint[],
@@ -416,21 +503,16 @@ export class CanvasStore {
     const memberIds = selected.map((s) => s.id);
 
     return this.db.transaction(() => {
-      this.nodeRepo.insertNode({
-        id: clusterId,
+      const clusterCmd = new ClusterStrokesCommand(this.db, this.nodeRepo, {
+        clusterId,
         canvasId: this.canvasId,
         layerId: targetLayerId,
-        nodeType: 'stroke_cluster',
-        parentClusterId: null,
+        memberStrokeIds: memberIds,
         bbox: worldAABB(minX, minY, maxX, maxY),
-        strokePoints: null,
-        style: null,
-        contentJson: { strokeCount: selected.length, trigger: 'circle_to_action' },
-        ocrText: null,
         semanticTags: [...tagSet],
+        contentJson: { strokeCount: selected.length, trigger: 'circle_to_action' },
       });
-
-      this.nodeRepo.assignNodesToCluster(memberIds, clusterId);
+      this.history.execute(clusterCmd);
 
       return this.jobQueue.enqueueClusterJob({
         canvasId: this.canvasId,

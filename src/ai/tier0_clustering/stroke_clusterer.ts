@@ -1,4 +1,9 @@
 import {
+  areStrokeBoxesProximate,
+  STROKE_CLUSTER_MAX_GAP_X,
+  STROKE_CLUSTER_MAX_GAP_Y,
+} from '../../core/canvas/math.js';
+import {
   nodeId,
   worldAABB,
   type CanvasId,
@@ -7,6 +12,7 @@ import {
   type SemanticColor,
   type WorldAABB,
 } from '../../core/canvas/types.js';
+import { ClusterStrokesCommand } from '../../core/commands/canvas_command.js';
 import type { NoteFlowDatabase } from '../../db/client.js';
 import type {
   SpatialNodeRecord,
@@ -15,20 +21,14 @@ import type {
 import type { AsyncJobQueue } from '../../state/async_job_queue.js';
 
 export const TIER0_DEBOUNCE_MS = 1200;
-export const CLUSTER_MAX_GAP_X = 48;
-export const CLUSTER_MAX_GAP_Y = 24;
+export const CLUSTER_MAX_GAP_X = STROKE_CLUSTER_MAX_GAP_X;
+export const CLUSTER_MAX_GAP_Y = STROKE_CLUSTER_MAX_GAP_Y;
 
 export interface StrokeCommittedNotification {
   readonly strokeId: NodeId;
   readonly canvasId: CanvasId;
   readonly layerId: LayerId;
   readonly colorId: SemanticColor;
-}
-
-function areBoxesSpatiallyProximate(a: WorldAABB, b: WorldAABB): boolean {
-  const gapX = Math.max(0, Math.max(a[0], b[0]) - Math.min(a[2], b[2]));
-  const gapY = Math.max(0, Math.max(a[1], b[1]) - Math.min(a[3], b[3]));
-  return gapX < CLUSTER_MAX_GAP_X && gapY < CLUSTER_MAX_GAP_Y;
 }
 
 function unionAABBs(boxes: readonly WorldAABB[]): WorldAABB {
@@ -80,9 +80,10 @@ export class Tier0StrokeClusterer {
   }
 
   /**
-   * Runs Spatial Union-Find over unclustered strokes in the given layer, creates
-   * `stroke_cluster` parent nodes, and enqueues a `verify_claim` job if triggered
-   * by a Violet AI Highlighter stroke.
+   * Runs Spatial Union-Find over unclustered strokes AND existing `stroke_cluster`s
+   * in the given layer, creates or merges `stroke_cluster` parent nodes via
+   * `ClusterStrokesCommand`, and enqueues a `verify_claim` job if triggered by a
+   * Violet AI Highlighter stroke.
    */
   public clusterLayerNow(
     targetCanvasId: CanvasId,
@@ -95,8 +96,29 @@ export class Tier0StrokeClusterer {
     );
     if (unclustered.length === 0) return [];
 
-    // Disjoint-Set (Union-Find) over unclustered strokes
-    const parent = unclustered.map((_, i) => i);
+    const existingClusters = this.nodeRepo.getClustersInLayer(
+      targetCanvasId,
+      targetLayerId
+    );
+    const allExistingChildren =
+      existingClusters.length > 0
+        ? this.nodeRepo.getChildStrokesOfClusters(
+            existingClusters.map((c) => c.id)
+          )
+        : [];
+    const childrenByClusterId = new Map<NodeId, SpatialNodeRecord[]>();
+    for (const child of allExistingChildren) {
+      if (!child.parentClusterId) continue;
+      let list = childrenByClusterId.get(child.parentClusterId);
+      if (!list) {
+        list = [];
+        childrenByClusterId.set(child.parentClusterId, list);
+      }
+      list.push(child);
+    }
+
+    const items = [...existingClusters, ...unclustered];
+    const parent = items.map((_, i) => i);
     const find = (i: number): number => {
       while (parent[i] !== i) {
         parent[i] = parent[parent[i]!]!;
@@ -112,72 +134,149 @@ export class Tier0StrokeClusterer {
       }
     };
 
-    for (let i = 0; i < unclustered.length; i++) {
-      for (let j = i + 1; j < unclustered.length; j++) {
-        if (
-          areBoxesSpatiallyProximate(unclustered[i]!.bbox, unclustered[j]!.bbox)
-        ) {
-          union(i, j);
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        // At least one item must be a newly added unclustered stroke
+        if (i < existingClusters.length && j < existingClusters.length) {
+          continue;
         }
+        const itemI = items[i]!;
+        const itemJ = items[j]!;
+        // Fast coarse AABB check first
+        if (!areStrokeBoxesProximate(itemI.bbox, itemJ.bbox)) {
+          continue;
+        }
+        // If itemI is an existing cluster, verify proximity against at least one constituent child stroke
+        // so L-shaped or multi-line clusters do not falsely absorb strokes in empty corners of their coarse AABB.
+        if (i < existingClusters.length) {
+          const clusterChildren = childrenByClusterId.get(itemI.id) ?? [];
+          const nearAnyChild =
+            clusterChildren.length === 0
+              ? true
+              : clusterChildren.some((child) =>
+                  areStrokeBoxesProximate(child.bbox, itemJ.bbox)
+                );
+          if (!nearAnyChild) {
+            continue;
+          }
+        }
+        union(i, j);
       }
     }
 
-    const groups = new Map<number, SpatialNodeRecord[]>();
-    for (let i = 0; i < unclustered.length; i++) {
+    const groups = new Map<
+      number,
+      {
+        existingClusters: SpatialNodeRecord[];
+        newStrokes: SpatialNodeRecord[];
+      }
+    >();
+
+    for (let i = 0; i < items.length; i++) {
       const root = find(i);
-      let list = groups.get(root);
-      if (!list) {
-        list = [];
-        groups.set(root, list);
+      let entry = groups.get(root);
+      if (!entry) {
+        entry = { existingClusters: [], newStrokes: [] };
+        groups.set(root, entry);
       }
-      list.push(unclustered[i]!);
+      if (i < existingClusters.length) {
+        entry.existingClusters.push(items[i]!);
+      } else {
+        entry.newStrokes.push(items[i]!);
+      }
     }
 
-    const createdClusterIds: NodeId[] = [];
+    const createdOrUpdatedClusterIds: NodeId[] = [];
 
     this.db.transaction(() => {
-      for (const members of groups.values()) {
-        const newClusterId = nodeId(crypto.randomUUID());
-        const combinedBbox = unionAABBs(members.map((m) => m.bbox));
+      for (const group of groups.values()) {
+        if (group.newStrokes.length === 0) continue;
+
+        const primaryExisting = group.existingClusters[0] ?? null;
+        const targetClusterId = primaryExisting
+          ? primaryExisting.id
+          : nodeId(crypto.randomUUID());
+
+        const existingChildren =
+          group.existingClusters.length > 0
+            ? this.nodeRepo.getChildStrokesOfClusters(
+                group.existingClusters.map((c) => c.id)
+              )
+            : [];
+
+        const allMemberStrokes = [...existingChildren, ...group.newStrokes];
+        const allMemberIds = allMemberStrokes.map((m) => m.id);
+        const combinedBbox = unionAABBs(allMemberStrokes.map((m) => m.bbox));
+
         const tagSet = new Set<string>();
-        for (const m of members) {
+        for (const m of allMemberStrokes) {
           for (const t of m.semanticTags) tagSet.add(t);
         }
 
-        const memberIds = members.map((m) => m.id);
-        this.nodeRepo.insertNode({
-          id: newClusterId,
+        const obsoleteClusterIds = group.existingClusters
+          .slice(1)
+          .map((c) => c.id);
+
+        const clusterCmd = new ClusterStrokesCommand(this.db, this.nodeRepo, {
+          clusterId: targetClusterId,
           canvasId: targetCanvasId,
           layerId: targetLayerId,
-          nodeType: 'stroke_cluster',
-          parentClusterId: null,
+          memberStrokeIds: allMemberIds,
           bbox: combinedBbox,
-          strokePoints: null,
-          style: null,
-          contentJson: { strokeCount: members.length },
-          ocrText: null,
           semanticTags: [...tagSet],
+          contentJson: { strokeCount: allMemberIds.length },
+          obsoleteClusterIdsToDelete: obsoleteClusterIds,
         });
+        clusterCmd.execute();
+        this.jobQueue.cancelJobsForNodes([
+          targetClusterId,
+          ...obsoleteClusterIds,
+        ]);
 
-        this.nodeRepo.assignNodesToCluster(memberIds, newClusterId);
-        createdClusterIds.push(newClusterId);
+        createdOrUpdatedClusterIds.push(targetClusterId);
 
-        const isVioletTriggered =
-          tagSet.has('violet') ||
-          (violetTriggerStrokeId !== undefined &&
-            memberIds.includes(violetTriggerStrokeId));
+        const newStrokesHaveViolet = group.newStrokes.some(
+          (s) =>
+            s.semanticTags.includes('violet') ||
+            (violetTriggerStrokeId !== undefined &&
+              s.id === violetTriggerStrokeId)
+        );
 
-        if (isVioletTriggered) {
+        if (newStrokesHaveViolet || tagSet.has('violet')) {
           this.jobQueue.enqueueClusterJob({
             canvasId: targetCanvasId,
-            anchorClusterId: newClusterId,
+            anchorClusterId: targetClusterId,
             jobType: 'verify_claim',
-            memberStrokeIds: memberIds,
+            memberStrokeIds: allMemberIds,
           });
         }
       }
     });
 
-    return createdClusterIds;
+    return createdOrUpdatedClusterIds;
+  }
+
+  /**
+   * Re-enqueues a `verify_claim` badge on `clusterId` when a Violet cluster is restored via Redo.
+   */
+  public ensureClusterBadgeIfViolet(
+    targetCanvasId: CanvasId,
+    clusterId: NodeId
+  ): void {
+    const cluster = this.nodeRepo.getById(clusterId);
+    if (!cluster || cluster.nodeType !== 'stroke_cluster') return;
+    const children = this.nodeRepo.getChildStrokesOfClusters([clusterId]);
+    const hasViolet =
+      cluster.semanticTags.includes('violet') ||
+      children.some((c) => c.semanticTags.includes('violet'));
+    if (!hasViolet) return;
+
+    this.jobQueue.cancelJobsForNodes([clusterId]);
+    this.jobQueue.enqueueClusterJob({
+      canvasId: targetCanvasId,
+      anchorClusterId: clusterId,
+      jobType: 'verify_claim',
+      memberStrokeIds: children.map((c) => c.id),
+    });
   }
 }

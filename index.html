@@ -302,6 +302,110 @@
         white-space: nowrap;
         pointer-events: none;
       }
+
+      /* Floating 6-Slot Radial Tool Wheel (1-Finger Hold >= 220ms) */
+      .nf-radial-wheel {
+        position: absolute;
+        width: 180px;
+        height: 180px;
+        margin-left: -90px;
+        margin-top: -90px;
+        z-index: 20;
+        display: none;
+        pointer-events: auto;
+      }
+
+      .nf-radial-wheel-visible {
+        display: block;
+      }
+
+      .nf-radial-center {
+        position: absolute;
+        left: 90px;
+        top: 90px;
+        width: 52px;
+        height: 52px;
+        margin-left: -26px;
+        margin-top: -26px;
+        border-radius: 50%;
+        background: rgba(30, 41, 59, 0.88);
+        color: #ffffff;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.22);
+        pointer-events: none;
+      }
+
+      .nf-radial-slice {
+        position: absolute;
+        width: 52px;
+        height: 52px;
+        margin-left: -26px;
+        margin-top: -26px;
+        border-radius: 50%;
+        border: 1px solid var(--glass-border);
+        background: var(--glass-bg);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        color: var(--text-main);
+        font-size: 10px;
+        font-weight: 700;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        cursor: pointer;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+        transition: transform 0.12s ease, background 0.12s ease;
+      }
+
+      .nf-radial-slice.nf-tool-active {
+        background: #1e293b;
+        color: #ffffff;
+        border-color: #1e293b;
+        transform: scale(1.1);
+      }
+
+      /* AI Status Badge Inspection Popover */
+      .nf-badge-popover {
+        position: absolute;
+        width: 268px;
+        z-index: 25;
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        background: var(--glass-bg);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        border: 1px solid var(--glass-border);
+        border-radius: 12px;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+        pointer-events: auto;
+      }
+
+      .nf-badge-popover-visible {
+        display: flex;
+      }
+
+      .nf-badge-popover-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .nf-badge-popover-message {
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--text-main);
+      }
     </style>
   </head>
   <body>
