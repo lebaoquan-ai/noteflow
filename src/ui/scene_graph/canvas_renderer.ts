@@ -303,11 +303,19 @@ export class DualCanvasRenderer {
         );
       } else if (node.nodeType === 'stroke_cluster') {
         const isViolet = node.semanticTags.includes('violet');
+        const promotedKeywords = Array.isArray(
+          node.contentJson?.promotedKeywords
+        )
+          ? (node.contentJson.promotedKeywords as string[])
+          : [];
+        const hasPromoted = promotedKeywords.length > 0;
         ctx.save();
         ctx.globalAlpha = layerOpacity;
         ctx.strokeStyle = isViolet
           ? 'rgba(124, 58, 237, 0.45)'
-          : 'rgba(148, 163, 184, 0.35)';
+          : hasPromoted
+            ? 'rgba(29, 78, 216, 0.48)'
+            : 'rgba(148, 163, 184, 0.35)';
         ctx.lineWidth = 1.2 / frame.camera.zoom;
         ctx.setLineDash([4 / frame.camera.zoom, 4 / frame.camera.zoom]);
         ctx.strokeRect(
@@ -316,6 +324,16 @@ export class DualCanvasRenderer {
           node.bbox[2] - node.bbox[0] + 8,
           node.bbox[3] - node.bbox[1] + 8
         );
+        if (hasPromoted) {
+          ctx.setLineDash([]);
+          const label = `⚛ ${promotedKeywords[0]}`;
+          const chipW = Math.min(200, Math.max(64, label.length * 6.5 + 14));
+          ctx.fillStyle = 'rgba(239, 246, 255, 0.94)';
+          ctx.fillRect(node.bbox[0] - 4, node.bbox[1] - 22, chipW, 16);
+          ctx.fillStyle = '#1D4ED8';
+          ctx.font = '600 10px Inter, system-ui, sans-serif';
+          ctx.fillText(label, node.bbox[0] + 2, node.bbox[1] - 11);
+        }
         ctx.restore();
       } else if (node.nodeType === 'zettel_card') {
         ctx.save();

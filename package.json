@@ -7,8 +7,10 @@
     "dev": "vite --host",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:headless": "vitest run tests/headless",
-    "test": "vitest run"
+    "test:headless": "vitest run tests/headless --reporter=dot --bail=1",
+    "test": "vitest run --reporter=dot --bail=1",
+    "ctx": "node scripts/context_query.mjs",
+    "verify:gate": "node scripts/context_query.mjs gate"
   },
   "dependencies": {
     "zod": "^3.24.2"

@@ -14,3 +14,12 @@ The master architectural specification lives at `docs/SPEC.md`. Read relevant se
 2. **Runtime Zod Validation:** Every boundary (SQLite row parsing, Worker messages, AI Tool calls, Bridge events) MUST be validated with a Zod schema.
 3. **Pure Core:** Files inside `src/core/**` must have ZERO imports from `react`, DOM APIs, or `src/ui/**`.
 4. **Scope Control:** Do not refactor or modify files outside your assigned task scope without stopping and asking the user first.
+
+## 3. Context Engineering & Tool Hygiene (Self-Managed)
+1. **AST Symbol-First Reads (No Blind File Dumps):** Never read a full file `>150` lines without first running `npm run ctx -- symbols <file>`, `npm run ctx -- symbol <Name>`, or `grep -n` to get exact `StartLine`–`EndLine` bounds for `read_file`.
+2. **Pre-Filtered Shell & Deterministic TDD Gate:**
+   - Always pipe search or directory commands through `| head -n 30`.
+   - Use `npm run verify:gate` (runs `tsc --noEmit` + Pure-Core invariant check + `vitest run tests/headless --reporter=dot --bail=1` and outputs a single compact JSON line) during TDD loops.
+   - If a tool call or fix attempt fails twice consecutively, stop looping and either isolate via a subagent or ask the user.
+3. **Subagent Context Firewall & Schema Handoffs:** Delegate open-ended multi-file discovery or pre-review verification to a subagent (`invoke_subagent`) instructed to return ONLY a compact JSON/markdown summary (`<250 tokens`: `file`, `lines`, `signature`, `fix_instruction`).
+4. **Proactive User Context Reminders:** At the end of major planning or milestone turns, append a brief **Context & Tool Reminder** advising the user when to run `/compact`, `/clear` (re-anchoring on `@docs/...`), or `/rewind`.

@@ -54,6 +54,8 @@ export class TabletPointerBridge {
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPinchDistance: number | null = null;
   private lastPinchCenter: { x: number; y: number } | null = null;
+  private lastPinchAngle: number | null = null;
+  private wacomLassoGraceUntil = -1;
   private gestureSequenceId = 0;
 
   public constructor(
@@ -75,6 +77,16 @@ export class TabletPointerBridge {
     if (isStylusOrMouse) {
       this.clearHoldTimer();
       this.gestureSequenceId++;
+      if (this._gestureState === 'IDLE' && this.wacomLassoGraceUntil >= 0) {
+        if (e.timeStamp <= this.wacomLassoGraceUntil) {
+          this.transition({
+            type: 'TOUCH_START',
+            touches: [{ id: -1, x: e.clientX, y: e.clientY }],
+          });
+          this.transition({ type: 'TOUCH_HOLD_TIMEOUT' });
+        }
+        this.wacomLassoGraceUntil = -1;
+      }
       this.transition({
         type: 'PEN_DOWN',
         x: e.clientX,
@@ -92,6 +104,8 @@ export class TabletPointerBridge {
       this.callbacks.onWetRepaint?.();
       return;
     }
+
+    this.wacomLassoGraceUntil = -1;
 
     // Touch input: enforce palm rejection if stylus is already drawing
     if (
@@ -164,6 +178,7 @@ export class TabletPointerBridge {
       if (
         this._gestureState === 'PEN_DRAWING' &&
         this.store.activeTool === 'stroke_eraser' &&
+        this.store.activeLayer.isVisible &&
         !this.store.activeLayer.isLocked &&
         this.wetBuffer.committedCount >= 2 &&
         prevCount >= 1
@@ -191,7 +206,8 @@ export class TabletPointerBridge {
           wStart,
           wEnd,
           8.0 / this.store.camera.zoom,
-          this.gestureSequenceId
+          this.gestureSequenceId,
+          this.store.getEditableLayerIds()
         );
         this.store.history.execute(sliceCmd);
         if (sliceCmd.didMutate) {
@@ -254,9 +270,24 @@ export class TabletPointerBridge {
         const ratio = dist / this.lastPinchDistance;
         this.store.zoomCamera(screenPoint(centerX, centerY), ratio);
       }
+      const angle = Math.atan2(
+        p1.currentY - p0.currentY,
+        p1.currentX - p0.currentX
+      );
+      if (
+        !this.store.rotationLocked &&
+        this.lastPinchAngle !== null &&
+        dist > 4
+      ) {
+        let deltaAngle = angle - this.lastPinchAngle;
+        while (deltaAngle > Math.PI) deltaAngle -= 2 * Math.PI;
+        while (deltaAngle < -Math.PI) deltaAngle += 2 * Math.PI;
+        this.store.rotateCamera(this.store.camera.rotation + deltaAngle);
+      }
 
       this.lastPinchCenter = { x: centerX, y: centerY };
       this.lastPinchDistance = dist;
+      this.lastPinchAngle = angle;
       this.callbacks.onDryRepaint?.();
     }
   }
@@ -267,6 +298,12 @@ export class TabletPointerBridge {
     if (isStylusOrMouse) {
       const priorState = this._gestureState;
       this.transition({ type: 'PEN_UP' });
+      if (
+        this._gestureState === 'TOUCH_HOLD_MODIFIER' &&
+        this.activeTouches.size === 0
+      ) {
+        this.transition({ type: 'TOUCH_END', remainingTouches: 0 });
+      }
 
       if (
         priorState !== 'PEN_DRAWING' &&
@@ -341,6 +378,10 @@ export class TabletPointerBridge {
     this.activeTouches.delete(e.pointerId);
     this.clearHoldTimer();
 
+    if (this._gestureState === 'TOUCH_HOLD_PEN_LASSOING') {
+      return;
+    }
+
     if (this.activeTouches.size === 0) {
       const duration = e.timeStamp - this.gestureStartTimestamp;
       if (!this.anyTouchMovedBeyondSlop && duration <= 250) {
@@ -354,6 +395,7 @@ export class TabletPointerBridge {
       }
       this.lastPinchCenter = null;
       this.lastPinchDistance = null;
+      this.lastPinchAngle = null;
     } else {
       this.updatePinchBaseline();
     }
@@ -369,14 +411,30 @@ export class TabletPointerBridge {
     if (isStylusOrMouse) {
       this.wetBuffer.reset();
       this.transition({ type: 'PEN_CANCEL' });
+      if (
+        this._gestureState === 'TOUCH_HOLD_MODIFIER' &&
+        this.activeTouches.size === 0
+      ) {
+        this.transition({ type: 'TOUCH_END', remainingTouches: 0 });
+      }
       this.callbacks.onWetRepaint?.();
       return;
+    }
+
+    if (this._gestureState === 'TOUCH_HOLD_MODIFIER') {
+      this.wacomLassoGraceUntil = e.timeStamp + 400;
     }
 
     this.activeTouches.clear();
     this.clearHoldTimer();
     this.lastPinchCenter = null;
     this.lastPinchDistance = null;
+    this.lastPinchAngle = null;
+
+    if (this._gestureState === 'TOUCH_HOLD_PEN_LASSOING') {
+      return;
+    }
+
     this.transition({ type: 'TOUCH_CANCEL' });
   }
 
@@ -393,9 +451,14 @@ export class TabletPointerBridge {
         p1.currentX - p0.currentX,
         p1.currentY - p0.currentY
       );
+      this.lastPinchAngle = Math.atan2(
+        p1.currentY - p0.currentY,
+        p1.currentX - p0.currentX
+      );
     } else {
       this.lastPinchCenter = null;
       this.lastPinchDistance = null;
+      this.lastPinchAngle = null;
     }
   }
 

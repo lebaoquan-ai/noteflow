@@ -1,4 +1,5 @@
 import {
+  nodeId,
   screenPoint,
   worldAABB,
   type JobId,
@@ -17,6 +18,9 @@ import {
   UpdateJobBadgeToolSchema,
 } from '../ai/agent_contract.js';
 import { ZettelRepository } from '../db/repositories/zettel_repository.js';
+import { BrowserSqlEngine } from '../db/browser_sql_engine.js';
+import { NoteFlowDatabase } from '../db/client.js';
+import { IndexedDbVaultStorage } from '../db/indexeddb_persistence.js';
 import {
   CanvasStore,
   type ProjectedJobBadge,
@@ -70,6 +74,7 @@ function adaptDomPointerEvent(e: PointerEvent): BridgePointerEvent {
 export class NoteFlowTabletApp {
   public readonly store: CanvasStore;
   public readonly zettelRepo: ZettelRepository;
+  public readonly vaultStorage: IndexedDbVaultStorage;
   public readonly renderer: DualCanvasRenderer;
   public readonly bridge: TabletPointerBridge;
 
@@ -95,9 +100,17 @@ export class NoteFlowTabletApp {
   private lastPressure = 0.5;
   private lastCoalescedCount = 1;
 
-  public constructor(private readonly root: HTMLElement) {
-    this.store = CanvasStore.createInMemory('NoteFlow Tablet Prototype');
+  public constructor(
+    private readonly root: HTMLElement,
+    options?: {
+      readonly db?: NoteFlowDatabase;
+      readonly vaultStorage?: IndexedDbVaultStorage;
+    }
+  ) {
+    const db = options?.db ?? NoteFlowDatabase.createBrowserInMemory();
+    this.store = CanvasStore.fromDatabase(db, 'NoteFlow Tablet Prototype');
     this.zettelRepo = new ZettelRepository(this.store.db);
+    this.vaultStorage = options?.vaultStorage ?? new IndexedDbVaultStorage();
     this.renderer = new DualCanvasRenderer();
 
     this.root.innerHTML = this.buildShellHtml();
@@ -140,8 +153,53 @@ export class NoteFlowTabletApp {
     this.bindPointerEvents();
     this.bindToolbarEvents();
     this.seedStarterCanvas();
+    this.bindVaultPersistence();
     this.scheduleDryRender();
     this.updateHudState();
+  }
+
+  private bindVaultPersistence(): void {
+    const rawEngine = this.store.db.raw;
+    if (!(rawEngine instanceof BrowserSqlEngine)) return;
+
+    this.vaultStorage.bindEngine(rawEngine);
+    void this.hydrateFromVaultIfPresent();
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          void this.vaultStorage.saveImmediate(rawEngine);
+        }
+      });
+    }
+  }
+
+  public async hydrateFromVaultIfPresent(): Promise<boolean> {
+    const rawEngine = this.store.db.raw;
+    if (!(rawEngine instanceof BrowserSqlEngine)) return false;
+
+    const hydrated = await this.vaultStorage.hydrateEngine(rawEngine);
+    if (!hydrated) return false;
+
+    this.store.syncFromDatabase('NoteFlow Tablet Prototype');
+    this.store.history.clear();
+    this.scheduleDryRender();
+    this.updateHudState();
+    return true;
+  }
+
+  public async resetVaultAndReseed(): Promise<void> {
+    await this.vaultStorage.clearVault();
+    const rawEngine = this.store.db.raw;
+    if (rawEngine instanceof BrowserSqlEngine) {
+      rawEngine.close();
+      this.store.syncFromDatabase('NoteFlow Tablet Prototype');
+      this.store.history.clear();
+      this.seedStarterCanvas();
+      await this.vaultStorage.saveImmediate(rawEngine);
+      this.scheduleDryRender();
+      this.updateHudState();
+    }
   }
 
   private buildShellHtml(): string {
@@ -178,6 +236,7 @@ export class NoteFlowTabletApp {
           </div>
 
           <div class="nf-history-bar">
+            <button class="nf-btn" id="btn-rotation-lock" title="Toggle 2-Finger Camera Rotation">🔒 Rotate: OFF</button>
             <button class="nf-btn" id="btn-undo" title="Undo (or 2-Finger Tap)">↶ Undo</button>
             <button class="nf-btn" id="btn-redo" title="Redo (or 3-Finger Tap)">↷ Redo</button>
             <button class="nf-btn" id="btn-reset-camera" title="Reset Camera Zoom & Pan">⌖ 100%</button>
@@ -241,6 +300,23 @@ export class NoteFlowTabletApp {
           <button class="nf-action-btn" id="btn-export-svg">
             📤 Export SVG
           </button>
+          <button class="nf-action-btn" id="btn-toggle-vault" title="Toggle Multimodal Zettel Vault Drawer">
+            🗄️ Zettel Vault
+          </button>
+          <button class="nf-action-btn" id="btn-reset-vault" title="Clear IndexedDB Vault & Reset Starter Canvas">
+            🗑️ Reset Vault
+          </button>
+        </aside>
+
+        <!-- Collapsible Multimodal Zettelkasten Vault Drawer (Decision 1A & 2A) -->
+        <aside id="zettel-vault-drawer" class="nf-badge-popover" style="right: 16px; top: 76px; width: 320px; max-height: calc(100vh - 150px); overflow-y: auto;" aria-label="Multimodal Zettel Vault">
+          <div class="nf-badge-popover-header">
+            <span class="nf-badge-pill">⚛ Multimodal Zettel Vault</span>
+            <button class="nf-btn" id="btn-vault-close" title="Close Vault">✕</button>
+          </div>
+          <div id="zettel-vault-content" class="nf-badge-popover-message">
+            No symbol-marked keywords yet. Circle, underline, or #tag a concept on the canvas!
+          </div>
         </aside>
 
         <!-- Bottom Gesture Hint Pill -->
@@ -543,7 +619,17 @@ export class NoteFlowTabletApp {
       this.scheduleDryRender();
     });
 
-    // Undo / Redo / Reset Camera
+    // Rotation lock / Undo / Redo / Reset Camera
+    const rotationLockBtn =
+      this.root.querySelector<HTMLButtonElement>('#btn-rotation-lock');
+    rotationLockBtn?.addEventListener('click', () => {
+      const nextLocked = !this.store.rotationLocked;
+      this.store.setRotationLocked(nextLocked);
+      rotationLockBtn.textContent = nextLocked
+        ? '🔒 Rotate: OFF'
+        : '🔓 Rotate: ON';
+      this.updateHudState();
+    });
     this.root.querySelector('#btn-undo')?.addEventListener('click', () => {
       this.store.history.undo();
       this.scheduleDryRender();
@@ -558,6 +644,7 @@ export class NoteFlowTabletApp {
       const cam = this.store.camera;
       this.store.panCamera(-cam.panX, -cam.panY);
       this.store.zoomCamera(screenPoint(0, 0), 1 / cam.zoom);
+      this.store.rotateCamera(0);
       this.scheduleDryRender();
       this.updateHudState();
     });
@@ -574,6 +661,23 @@ export class NoteFlowTabletApp {
     });
     this.root.querySelector('#btn-export-svg')?.addEventListener('click', () => {
       this.downloadArtboardSvg();
+    });
+    this.root.querySelector('#btn-toggle-vault')?.addEventListener('click', () => {
+      const drawer = this.root.querySelector<HTMLElement>('#zettel-vault-drawer');
+      if (drawer) {
+        this.store.syncZettelkastenNow();
+        drawer.classList.toggle('nf-badge-popover-visible');
+        this.syncVaultDrawerDom();
+        this.scheduleDryRender();
+      }
+    });
+    this.root.querySelector('#btn-vault-close')?.addEventListener('click', () => {
+      this.root
+        .querySelector<HTMLElement>('#zettel-vault-drawer')
+        ?.classList.remove('nf-badge-popover-visible');
+    });
+    this.root.querySelector('#btn-reset-vault')?.addEventListener('click', () => {
+      void this.resetVaultAndReseed();
     });
   }
 
@@ -947,8 +1051,13 @@ export class NoteFlowTabletApp {
           : badge.status === 'running'
             ? '↻ Analysing spatial stroke cluster...'
             : '● Claim & spatial cluster verified.';
+    const linkedZettelId =
+      typeof badge.resultJson?.linkedZettelId === 'string'
+        ? badge.resultJson.linkedZettelId
+        : null;
     const alreadySynthesized =
-      typeof badge.resultJson?.linkedZettelId === 'string';
+      linkedZettelId !== null &&
+      this.store.nodeRepo.getById(nodeId(linkedZettelId)) !== null;
 
     if (pillEl) pillEl.textContent = `${badge.status} • ${badgeState}`;
     if (msgEl) msgEl.textContent = tooltipMessage;
@@ -1018,6 +1127,61 @@ export class NoteFlowTabletApp {
         this.closeBadgePopover();
       }
     }
+
+    this.syncVaultDrawerDom();
+  }
+
+  public syncVaultDrawerDom(): void {
+    const contentEl = this.root.querySelector<HTMLElement>(
+      '#zettel-vault-content'
+    );
+    if (!contentEl) return;
+
+    const zettels = this.zettelRepo.getAllZettels();
+    const blocks = this.zettelRepo.getCanvasBlocks(this.store.canvasId);
+    const keywords = this.zettelRepo.getZettelKeywords(this.store.canvasId);
+    const tasks = this.zettelRepo.getAgendaTasks(this.store.canvasId);
+
+    const boundBlockIds = new Set<string>(keywords.map((k) => k.canvasBlockId));
+    for (const z of zettels) {
+      for (const ev of this.zettelRepo.getEvidenceLinksForZettel(z.id)) {
+        boundBlockIds.add(ev.blockId);
+      }
+    }
+    const unboundBlocks = blocks.filter((b) => !boundBlockIds.has(b.id));
+
+    const zettelItems = zettels
+      .map(
+        (z) =>
+          `<div style="margin-bottom:8px;padding:6px;border-radius:8px;background:rgba(239,246,255,0.85);">
+            <strong>⚛ ${z.title}</strong> (${z.verificationState})<br/>
+            <span style="font-size:11px;white-space:pre-line;">${z.summaryMarkdown}</span>
+          </div>`
+      )
+      .join('');
+
+    const unboundItems = unboundBlocks
+      .map(
+        (b) =>
+          `<div style="font-size:11px;margin-bottom:4px;opacity:0.85;">• [${b.modality}] ${b.rawText}</div>`
+      )
+      .join('');
+
+    const taskItems = tasks
+      .map(
+        (t) =>
+          `<div style="font-size:11px;margin-bottom:4px;">${t.completed ? '☑' : '☐'} ${t.taskText} ${t.dueDateIso ? `(@${t.dueDateIso})` : ''}</div>`
+      )
+      .join('');
+
+    contentEl.innerHTML = `
+      <div><strong>Atomic Zettels (${zettels.length})</strong></div>
+      ${zettelItems || '<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">None promoted yet</div>'}
+      <div style="margin-top:8px;"><strong>Fleeting / Unbound Blocks (${unboundBlocks.length})</strong></div>
+      ${unboundItems || '<div style="font-size:11px;opacity:0.7;margin-bottom:8px;">All blocks bound</div>'}
+      <div style="margin-top:8px;"><strong>Agenda Tasks (${tasks.length})</strong></div>
+      ${taskItems || '<div style="font-size:11px;opacity:0.7;">No tasks</div>'}
+    `;
   }
 }
 
@@ -1074,7 +1238,14 @@ export function synthesizeZettelForBadge(
 ): NodeId | null {
   const badge = store.jobRepo.getBadgeById(badgeId);
   if (!badge) return null;
-  if (typeof badge.resultJson?.linkedZettelId === 'string') {
+  const existingLinkedId =
+    typeof badge.resultJson?.linkedZettelId === 'string'
+      ? badge.resultJson.linkedZettelId
+      : null;
+  if (
+    existingLinkedId !== null &&
+    store.nodeRepo.getById(nodeId(existingLinkedId)) !== null
+  ) {
     return null;
   }
 

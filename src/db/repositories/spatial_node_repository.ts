@@ -126,8 +126,87 @@ function parseSpatialNodeRow(rawRow: unknown): SpatialNodeRecord {
   };
 }
 
+const RawCanvasRowSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string(),
+  camera_state_json: z.string(),
+  updated_at: z.number().int(),
+});
+
+const RawLayerRowSchema = z.object({
+  id: z.string().uuid(),
+  canvas_id: z.string().uuid(),
+  name: z.string(),
+  layer_type: LayerTypeSchema,
+  z_index: z.number().int(),
+  is_visible: z.number().int(),
+  is_locked: z.number().int(),
+  opacity: z.number().finite(),
+});
+
+export interface HydratedCanvasRecord {
+  readonly canvasId: CanvasId;
+  readonly title: string;
+  readonly cameraStateJson: string;
+  readonly layers: readonly {
+    readonly id: LayerId;
+    readonly name: string;
+    readonly layerType: LayerType;
+    readonly zIndex: number;
+    readonly isVisible: boolean;
+    readonly isLocked: boolean;
+    readonly opacity: number;
+  }[];
+}
+
 export class SpatialNodeRepository {
   public constructor(private readonly db: NoteFlowDatabase) {}
+
+  public getPrimaryCanvasWithLayers(): HydratedCanvasRecord | null {
+    const rawCanvas = this.db.raw
+      .prepare(
+        'SELECT id, title, camera_state_json, updated_at FROM canvases ORDER BY updated_at DESC LIMIT 1'
+      )
+      .get();
+    if (!rawCanvas) return null;
+    const parsedCanvas = RawCanvasRowSchema.parse(rawCanvas);
+    const rawLayers = this.db.raw
+      .prepare(
+        'SELECT id, canvas_id, name, layer_type, z_index, is_visible, is_locked, opacity FROM layers WHERE canvas_id = ? ORDER BY z_index ASC'
+      )
+      .all(parsedCanvas.id);
+
+    const layers = rawLayers.map((raw) => {
+      const l = RawLayerRowSchema.parse(raw);
+      return {
+        id: layerId(l.id),
+        name: l.name,
+        layerType: l.layer_type,
+        zIndex: l.z_index,
+        isVisible: l.is_visible !== 0,
+        isLocked: l.is_locked !== 0,
+        opacity: l.opacity,
+      };
+    });
+
+    return {
+      canvasId: canvasId(parsedCanvas.id),
+      title: parsedCanvas.title,
+      cameraStateJson: parsedCanvas.camera_state_json,
+      layers,
+    };
+  }
+
+  public updateCanvasCamera(
+    targetCanvasId: CanvasId,
+    cameraStateJson: string
+  ): void {
+    this.db.raw
+      .prepare(
+        'UPDATE canvases SET camera_state_json = ?, updated_at = ? WHERE id = ?'
+      )
+      .run(cameraStateJson, Date.now(), targetCanvasId);
+  }
 
   public ensureCanvasAndLayer(params: {
     canvasId: CanvasId;
@@ -309,6 +388,28 @@ export class SpatialNodeRepository {
         JSON.stringify(semanticTags),
         now,
         clusterId
+      );
+  }
+
+  public updateNodeMetadata(
+    nodeId: NodeId,
+    params: {
+      readonly contentJson: Record<string, unknown> | null;
+      readonly ocrText: string | null;
+      readonly semanticTags: readonly string[];
+    }
+  ): void {
+    const now = Date.now();
+    this.db.raw
+      .prepare(
+        `UPDATE spatial_nodes SET content_json = ?, ocr_text = ?, semantic_tags_json = ?, updated_at = ? WHERE id = ?`
+      )
+      .run(
+        params.contentJson ? JSON.stringify(params.contentJson) : null,
+        params.ocrText,
+        JSON.stringify(params.semanticTags),
+        now,
+        nodeId
       );
   }
 

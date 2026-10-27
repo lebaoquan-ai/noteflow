@@ -1,8 +1,14 @@
 import { z } from 'zod';
 import {
+  canvasId,
+  layerId,
   nodeId,
+  worldAABB,
   type Brand,
+  type CanvasId,
+  type LayerId,
   type NodeId,
+  type WorldAABB,
 } from '../../core/canvas/types.js';
 import type { NoteFlowDatabase } from '../client.js';
 
@@ -29,6 +35,44 @@ export const ZettelRelationTypeSchema = z.enum([
 
 export type ZettelRelationType = z.infer<typeof ZettelRelationTypeSchema>;
 
+export const BlockModalitySchema = z.enum([
+  'prose_explanation',
+  'sketch_diagram',
+  'comparison_table',
+  'math_expression',
+  'ordered_list',
+]);
+
+export type BlockModality = z.infer<typeof BlockModalitySchema>;
+
+export const KeywordMarkerTypeSchema = z.enum([
+  'circle',
+  'underline',
+  'double_underline',
+  'hash_tag',
+  'bang_axiom',
+  'question_inquiry',
+  'at_entity',
+]);
+
+export type KeywordMarkerType = z.infer<typeof KeywordMarkerTypeSchema>;
+
+export const EvidenceRelationTypeSchema = z.enum([
+  'inline_context',
+  'pointing_arrow_support',
+  'curly_brace_elaboration',
+  'section_flow',
+]);
+
+export type EvidenceRelationType = z.infer<typeof EvidenceRelationTypeSchema>;
+
+export const SpatialRelationTypeSchema = z.enum([
+  'pointing_arrow',
+  'curly_brace_group',
+]);
+
+export type SpatialRelationType = z.infer<typeof SpatialRelationTypeSchema>;
+
 const RawZettelRowSchema = z.object({
   id: z.string().uuid(),
   spatial_node_id: z.string().uuid().nullable(),
@@ -49,6 +93,61 @@ const RawZettelLinkRowSchema = z.object({
   confidence: z.number().finite(),
 });
 
+const RawCanvasBlockRowSchema = z.object({
+  id: z.string(),
+  canvas_id: z.string(),
+  spatial_node_id: z.string(),
+  modality: BlockModalitySchema,
+  raw_text: z.string(),
+  structured_json: z.string().nullable(),
+  min_x: z.number().finite(),
+  min_y: z.number().finite(),
+  max_x: z.number().finite(),
+  max_y: z.number().finite(),
+  updated_at: z.number().int(),
+});
+
+const RawZettelKeywordRowSchema = z.object({
+  id: z.string(),
+  canvas_id: z.string(),
+  zettel_id: z.string(),
+  source_block_id: z.string(),
+  keyword_text: z.string(),
+  normalized_keyword: z.string(),
+  marker_type: KeywordMarkerTypeSchema,
+  is_primary_concept: z.number().int(),
+  created_at: z.number().int(),
+});
+
+const RawZettelEvidenceLinkRowSchema = z.object({
+  id: z.string(),
+  zettel_id: z.string(),
+  block_id: z.string(),
+  evidence_role: EvidenceRelationTypeSchema,
+  confidence: z.number().finite(),
+  created_at: z.number().int(),
+});
+
+const RawSpatialRelationRowSchema = z.object({
+  id: z.string(),
+  canvas_id: z.string(),
+  connector_stroke_id: z.string(),
+  source_node_id: z.string(),
+  target_node_id: z.string(),
+  relation_type: SpatialRelationTypeSchema,
+  created_at: z.number().int(),
+});
+
+const RawAgendaTaskRowSchema = z.object({
+  id: z.string(),
+  canvas_id: z.string(),
+  source_node_id: z.string(),
+  task_text: z.string(),
+  due_date_iso: z.string().nullable(),
+  status: z.enum(['todo', 'done']),
+  created_at: z.number().int(),
+});
+
 export interface ZettelRecord {
   readonly id: ZettelId;
   readonly spatialNodeId: NodeId | null;
@@ -67,6 +166,64 @@ export interface ZettelLinkRecord {
   readonly targetZettelId: ZettelId;
   readonly relationType: ZettelRelationType;
   readonly confidence: number;
+}
+
+export interface CanvasBlockRecord {
+  readonly id: string;
+  readonly canvasId: CanvasId;
+  readonly layerId: LayerId;
+  readonly spatialNodeId: NodeId;
+  readonly modality: BlockModality;
+  readonly rawText: string;
+  readonly normalizedTokens: readonly string[];
+  readonly structuralMetadata: Record<string, unknown> | null;
+  readonly bbox: WorldAABB;
+  readonly updatedAt: number;
+}
+
+export interface ZettelKeywordRecord {
+  readonly id: string;
+  readonly zettelId: ZettelId;
+  readonly canvasBlockId: string;
+  readonly keywordText: string;
+  readonly normalizedKeyword: string;
+  readonly markerType: KeywordMarkerType;
+  readonly isPrimaryConcept: boolean;
+  readonly gestureStrokeId: NodeId | null;
+  readonly confidence: number;
+  readonly createdAt: number;
+}
+
+export interface ZettelEvidenceLinkRecord {
+  readonly id: string;
+  readonly zettelId: ZettelId;
+  readonly canvasBlockId: string;
+  readonly blockId: string;
+  readonly relationType: EvidenceRelationType;
+  readonly evidenceRole: EvidenceRelationType;
+  readonly connectorStrokeId: NodeId | null;
+  readonly weight: number;
+}
+
+export interface SpatialRelationRecord {
+  readonly id: string;
+  readonly canvasId: CanvasId;
+  readonly connectorStrokeId: NodeId;
+  readonly sourceClusterId: NodeId;
+  readonly targetClusterId: NodeId;
+  readonly relationType: SpatialRelationType;
+  readonly confidence: number;
+  readonly createdAt: number;
+}
+
+export interface AgendaTaskRecord {
+  readonly id: string;
+  readonly canvasId: CanvasId;
+  readonly spatialNodeId: NodeId;
+  readonly taskText: string;
+  readonly dueDateIso: string | null;
+  readonly completed: boolean;
+  readonly updatedAt: number;
 }
 
 function float32ToBlob(vec: Float32Array | null): Uint8Array | null {
@@ -108,6 +265,89 @@ function parseZettelLinkRow(raw: unknown): ZettelLinkRecord {
     targetZettelId: zettelId(row.target_zettel_id),
     relationType: row.relation_type,
     confidence: row.confidence,
+  };
+}
+
+function parseCanvasBlockRow(raw: unknown): CanvasBlockRecord {
+  const row = RawCanvasBlockRowSchema.parse(raw);
+  const parsedJson = row.structured_json
+    ? (JSON.parse(row.structured_json) as Record<string, unknown>)
+    : null;
+  const normalizedTokens = Array.isArray(parsedJson?.normalizedTokens)
+    ? (parsedJson.normalizedTokens as string[])
+    : [];
+  const lId =
+    typeof parsedJson?.layerId === 'string'
+      ? layerId(parsedJson.layerId)
+      : layerId(row.canvas_id);
+  return {
+    id: row.id,
+    canvasId: canvasId(row.canvas_id),
+    layerId: lId,
+    spatialNodeId: nodeId(row.spatial_node_id),
+    modality: row.modality,
+    rawText: row.raw_text,
+    normalizedTokens,
+    structuralMetadata: parsedJson,
+    bbox: worldAABB(row.min_x, row.min_y, row.max_x, row.max_y),
+    updatedAt: row.updated_at,
+  };
+}
+
+function parseZettelKeywordRow(raw: unknown): ZettelKeywordRecord {
+  const row = RawZettelKeywordRowSchema.parse(raw);
+  return {
+    id: row.id,
+    zettelId: zettelId(row.zettel_id),
+    canvasBlockId: row.source_block_id,
+    keywordText: row.keyword_text,
+    normalizedKeyword: row.normalized_keyword,
+    markerType: row.marker_type,
+    isPrimaryConcept: row.is_primary_concept !== 0,
+    gestureStrokeId: null,
+    confidence: 1.0,
+    createdAt: row.created_at,
+  };
+}
+
+function parseZettelEvidenceLinkRow(raw: unknown): ZettelEvidenceLinkRecord {
+  const row = RawZettelEvidenceLinkRowSchema.parse(raw);
+  return {
+    id: row.id,
+    zettelId: zettelId(row.zettel_id),
+    canvasBlockId: row.block_id,
+    blockId: row.block_id,
+    relationType: row.evidence_role,
+    evidenceRole: row.evidence_role,
+    connectorStrokeId: null,
+    weight: row.confidence,
+  };
+}
+
+function parseSpatialRelationRow(raw: unknown): SpatialRelationRecord {
+  const row = RawSpatialRelationRowSchema.parse(raw);
+  return {
+    id: row.id,
+    canvasId: canvasId(row.canvas_id),
+    connectorStrokeId: nodeId(row.connector_stroke_id),
+    sourceClusterId: nodeId(row.source_node_id),
+    targetClusterId: nodeId(row.target_node_id),
+    relationType: row.relation_type,
+    confidence: 1.0,
+    createdAt: row.created_at,
+  };
+}
+
+function parseAgendaTaskRow(raw: unknown): AgendaTaskRecord {
+  const row = RawAgendaTaskRowSchema.parse(raw);
+  return {
+    id: row.id,
+    canvasId: canvasId(row.canvas_id),
+    spatialNodeId: nodeId(row.source_node_id),
+    taskText: row.task_text,
+    dueDateIso: row.due_date_iso,
+    completed: row.status === 'done',
+    updatedAt: row.created_at,
   };
 }
 
@@ -295,5 +535,251 @@ export class ZettelRepository {
         targetZettel: c.zettel,
         similarity: c.similarity,
       }));
+  }
+
+  public updateZettel(params: {
+    id: ZettelId;
+    spatialNodeId: NodeId | null;
+    title: string;
+    summaryMarkdown: string;
+    latexBlocks?: readonly string[];
+    verificationState: VerificationState;
+  }): ZettelRecord {
+    const existing = this.getById(params.id);
+    if (!existing) {
+      return this.insertZettel({
+        id: params.id,
+        spatialNodeId: params.spatialNodeId,
+        title: params.title,
+        summaryMarkdown: params.summaryMarkdown,
+        latexBlocks: params.latexBlocks ?? [],
+        verificationState: params.verificationState,
+        embedding: null,
+      });
+    }
+    const now = Date.now();
+    this.db.raw
+      .prepare(
+        `UPDATE zettels SET spatial_node_id = ?, title = ?, summary_markdown = ?, verification_state = ?, updated_at = ? WHERE id = ?`
+      )
+      .run(
+        params.spatialNodeId,
+        params.title,
+        params.summaryMarkdown,
+        params.verificationState,
+        now,
+        params.id
+      );
+    return this.getById(params.id)!;
+  }
+
+  public upsertCanvasBlock(block: CanvasBlockRecord): CanvasBlockRecord {
+    const structuredPayload = {
+      ...(block.structuralMetadata ?? {}),
+      layerId: block.layerId,
+      normalizedTokens: block.normalizedTokens,
+    };
+    this.db.raw
+      .prepare(
+        `INSERT OR REPLACE INTO canvas_blocks (
+          id, canvas_id, spatial_node_id, modality, raw_text,
+          structured_json, min_x, min_y, max_x, max_y, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        block.id,
+        block.canvasId,
+        block.spatialNodeId,
+        block.modality,
+        block.rawText,
+        JSON.stringify(structuredPayload),
+        block.bbox[0],
+        block.bbox[1],
+        block.bbox[2],
+        block.bbox[3],
+        block.updatedAt
+      );
+    return this.getCanvasBlockByNodeId(block.spatialNodeId)!;
+  }
+
+  public deleteCanvasBlock(id: string): void {
+    this.db.raw.prepare(`DELETE FROM canvas_blocks WHERE id = ?`).run(id);
+  }
+
+  public getCanvasBlocks(targetCanvasId: CanvasId): CanvasBlockRecord[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM canvas_blocks WHERE canvas_id = ? ORDER BY min_y ASC, min_x ASC`
+      )
+      .all(targetCanvasId);
+    return rows.map(parseCanvasBlockRow);
+  }
+
+  public getCanvasBlockByNodeId(
+    spatialNodeId: NodeId
+  ): CanvasBlockRecord | null {
+    const row = this.db.raw
+      .prepare(`SELECT * FROM canvas_blocks WHERE spatial_node_id = ?`)
+      .get(spatialNodeId);
+    if (!row) return null;
+    return parseCanvasBlockRow(row);
+  }
+
+  public searchCanvasBlocks(
+    targetCanvasId: CanvasId,
+    query: string
+  ): CanvasBlockRecord[] {
+    const q = query.trim().toLowerCase();
+    if (!q) return this.getCanvasBlocks(targetCanvasId);
+    return this.getCanvasBlocks(targetCanvasId).filter(
+      (b) =>
+        b.rawText.toLowerCase().includes(q) ||
+        b.normalizedTokens.some((tok) => tok.includes(q)) ||
+        b.modality.toLowerCase().includes(q)
+    );
+  }
+
+  public replaceZettelKeywordsForCanvas(
+    targetCanvasId: CanvasId,
+    keywords: readonly ZettelKeywordRecord[]
+  ): void {
+    this.db.raw
+      .prepare(`DELETE FROM zettel_keywords WHERE canvas_id = ?`)
+      .run(targetCanvasId);
+    const stmt = this.db.raw.prepare(
+      `INSERT OR REPLACE INTO zettel_keywords (
+        id, canvas_id, zettel_id, source_block_id, keyword_text,
+        normalized_keyword, marker_type, is_primary_concept, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const kw of keywords) {
+      stmt.run(
+        kw.id,
+        targetCanvasId,
+        kw.zettelId,
+        kw.canvasBlockId,
+        kw.keywordText,
+        kw.normalizedKeyword,
+        kw.markerType,
+        kw.isPrimaryConcept ? 1 : 0,
+        kw.createdAt
+      );
+    }
+  }
+
+  public getZettelKeywords(targetCanvasId: CanvasId): ZettelKeywordRecord[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM zettel_keywords WHERE canvas_id = ? ORDER BY created_at ASC`
+      )
+      .all(targetCanvasId);
+    return rows.map(parseZettelKeywordRow);
+  }
+
+  public replaceEvidenceLinksForZettel(
+    targetZettelId: ZettelId,
+    links: readonly ZettelEvidenceLinkRecord[]
+  ): void {
+    this.db.raw
+      .prepare(`DELETE FROM zettel_evidence_links WHERE zettel_id = ?`)
+      .run(targetZettelId);
+    const now = Date.now();
+    const stmt = this.db.raw.prepare(
+      `INSERT OR REPLACE INTO zettel_evidence_links (
+        id, zettel_id, block_id, evidence_role, confidence, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`
+    );
+    for (const link of links) {
+      stmt.run(
+        link.id,
+        link.zettelId,
+        link.canvasBlockId,
+        link.relationType,
+        link.weight,
+        now
+      );
+    }
+  }
+
+  public getEvidenceLinksForZettel(
+    targetZettelId: ZettelId
+  ): ZettelEvidenceLinkRecord[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM zettel_evidence_links WHERE zettel_id = ? ORDER BY confidence DESC, created_at ASC`
+      )
+      .all(targetZettelId);
+    return rows.map(parseZettelEvidenceLinkRow);
+  }
+
+  public replaceSpatialRelationsForCanvas(
+    targetCanvasId: CanvasId,
+    relations: readonly SpatialRelationRecord[]
+  ): void {
+    this.db.raw
+      .prepare(`DELETE FROM spatial_relations WHERE canvas_id = ?`)
+      .run(targetCanvasId);
+    const stmt = this.db.raw.prepare(
+      `INSERT OR REPLACE INTO spatial_relations (
+        id, canvas_id, connector_stroke_id, source_node_id, target_node_id,
+        relation_type, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const rel of relations) {
+      stmt.run(
+        rel.id,
+        rel.canvasId,
+        rel.connectorStrokeId,
+        rel.sourceClusterId,
+        rel.targetClusterId,
+        rel.relationType,
+        rel.createdAt
+      );
+    }
+  }
+
+  public getSpatialRelations(
+    targetCanvasId: CanvasId
+  ): SpatialRelationRecord[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM spatial_relations WHERE canvas_id = ? ORDER BY created_at ASC`
+      )
+      .all(targetCanvasId);
+    return rows.map(parseSpatialRelationRow);
+  }
+
+  public replaceAgendaTasksForCanvas(
+    targetCanvasId: CanvasId,
+    tasks: readonly AgendaTaskRecord[]
+  ): void {
+    this.db.raw
+      .prepare(`DELETE FROM agenda_tasks WHERE canvas_id = ?`)
+      .run(targetCanvasId);
+    const stmt = this.db.raw.prepare(
+      `INSERT OR REPLACE INTO agenda_tasks (
+        id, canvas_id, source_node_id, task_text, due_date_iso, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const task of tasks) {
+      stmt.run(
+        task.id,
+        task.canvasId,
+        task.spatialNodeId,
+        task.taskText,
+        task.dueDateIso,
+        task.completed ? 'done' : 'todo',
+        task.updatedAt
+      );
+    }
+  }
+
+  public getAgendaTasks(targetCanvasId: CanvasId): AgendaTaskRecord[] {
+    const rows = this.db.raw
+      .prepare(
+        `SELECT * FROM agenda_tasks WHERE canvas_id = ? ORDER BY created_at ASC`
+      )
+      .all(targetCanvasId);
+    return rows.map(parseAgendaTaskRow);
   }
 }

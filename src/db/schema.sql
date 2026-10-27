@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS async_jobs (
 -- 5. Zettelkasten Knowledge Graph
 CREATE TABLE IF NOT EXISTS zettels (
     id TEXT PRIMARY KEY,
-    spatial_node_id TEXT UNIQUE REFERENCES spatial_nodes(id) ON DELETE SET NULL,
+    spatial_node_id TEXT REFERENCES spatial_nodes(id) ON DELETE SET NULL,
     title TEXT NOT NULL,
     summary_markdown TEXT NOT NULL,
     latex_blocks_json TEXT,
@@ -92,4 +92,85 @@ CREATE TABLE IF NOT EXISTS zettel_links (
     relation_type TEXT NOT NULL CHECK(relation_type IN ('supports', 'contradicts', 'derives_from', 'related')),
     confidence REAL NOT NULL DEFAULT 1.0,
     UNIQUE(source_zettel_id, target_zettel_id, relation_type)
+);
+
+-- 6. Multimodal Canvas Blocks (100% Registration of Prose, Sketches, Tables, Math, Lists)
+CREATE TABLE IF NOT EXISTS canvas_blocks (
+    id TEXT PRIMARY KEY,
+    canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+    spatial_node_id TEXT NOT NULL UNIQUE REFERENCES spatial_nodes(id) ON DELETE CASCADE,
+    modality TEXT NOT NULL CHECK(modality IN (
+        'prose_explanation',
+        'sketch_diagram',
+        'comparison_table',
+        'math_expression',
+        'ordered_list'
+    )),
+    raw_text TEXT NOT NULL DEFAULT '',
+    structured_json TEXT,
+    min_x REAL NOT NULL,
+    min_y REAL NOT NULL,
+    max_x REAL NOT NULL,
+    max_y REAL NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- 7. Symbol-Marked Keywords (Selective Promotion to Atomic Zettels)
+CREATE TABLE IF NOT EXISTS zettel_keywords (
+    id TEXT PRIMARY KEY,
+    canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+    zettel_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
+    source_block_id TEXT NOT NULL REFERENCES canvas_blocks(id) ON DELETE CASCADE,
+    keyword_text TEXT NOT NULL,
+    normalized_keyword TEXT NOT NULL,
+    marker_type TEXT NOT NULL CHECK(marker_type IN (
+        'circle',
+        'underline',
+        'double_underline',
+        'hash_tag',
+        'bang_axiom',
+        'question_inquiry',
+        'at_entity'
+    )),
+    is_primary_concept INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+-- 8. Multimodal Supporting Evidence Links (Prose, Sketches, Tables -> Atomic Zettels)
+CREATE TABLE IF NOT EXISTS zettel_evidence_links (
+    id TEXT PRIMARY KEY,
+    zettel_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
+    block_id TEXT NOT NULL REFERENCES canvas_blocks(id) ON DELETE CASCADE,
+    evidence_role TEXT NOT NULL CHECK(evidence_role IN (
+        'inline_context',
+        'pointing_arrow_support',
+        'curly_brace_elaboration',
+        'enclosed_group',
+        'section_flow'
+    )),
+    confidence REAL NOT NULL DEFAULT 1.0,
+    created_at INTEGER NOT NULL,
+    UNIQUE(zettel_id, block_id)
+);
+
+-- 9. Spatial Relations (Pointing Arrows & Curly Braces)
+CREATE TABLE IF NOT EXISTS spatial_relations (
+    id TEXT PRIMARY KEY,
+    canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+    connector_stroke_id TEXT NOT NULL REFERENCES spatial_nodes(id) ON DELETE CASCADE,
+    source_node_id TEXT NOT NULL REFERENCES spatial_nodes(id) ON DELETE CASCADE,
+    target_node_id TEXT NOT NULL REFERENCES spatial_nodes(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL CHECK(relation_type IN ('pointing_arrow', 'curly_brace_group')),
+    created_at INTEGER NOT NULL
+);
+
+-- 10. Agenda Tasks ([ ] / [x] / @date Hooks)
+CREATE TABLE IF NOT EXISTS agenda_tasks (
+    id TEXT PRIMARY KEY,
+    canvas_id TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
+    source_node_id TEXT NOT NULL REFERENCES spatial_nodes(id) ON DELETE CASCADE,
+    task_text TEXT NOT NULL,
+    due_date_iso TEXT,
+    status TEXT NOT NULL CHECK(status IN ('todo', 'done')),
+    created_at INTEGER NOT NULL
 );

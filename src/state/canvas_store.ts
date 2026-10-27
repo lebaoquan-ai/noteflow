@@ -1,4 +1,5 @@
 import {
+  CameraStateSchema,
   canvasId,
   layerId,
   nodeId,
@@ -42,6 +43,8 @@ import {
 } from '../db/repositories/async_job_repository.js';
 import { AsyncJobQueue } from './async_job_queue.js';
 import { Tier0StrokeClusterer } from '../ai/tier0_clustering/stroke_clusterer.js';
+import { ZettelRepository } from '../db/repositories/zettel_repository.js';
+import { AutoZettelSyncer } from '../ai/zettel_sync/auto_zettel_syncer.js';
 
 export type RadialToolSlot =
   | 'fountain_pen'
@@ -85,10 +88,12 @@ export class CanvasStore {
   public readonly db: NoteFlowDatabase;
   public readonly nodeRepo: SpatialNodeRepository;
   public readonly jobRepo: AsyncJobRepository;
+  public readonly zettelRepo: ZettelRepository;
   public readonly jobQueue: AsyncJobQueue;
   public readonly clusterer: Tier0StrokeClusterer;
+  public readonly zettelSyncer: AutoZettelSyncer;
   public readonly history: CommandHistory;
-  public readonly canvasId: CanvasId;
+  private _canvasId!: CanvasId;
 
   private _camera: CameraState = { panX: 0, panY: 0, zoom: 1.0, rotation: 0 };
   private _activeTool: RadialToolSlot = 'fountain_pen';
@@ -99,15 +104,23 @@ export class CanvasStore {
     brushType: 'pen',
   };
   private _isTeachingMode = false;
+  private _rotationLocked = true;
   private readonly layersByType = new Map<LayerType, SmartLayerState>();
   private readonly layersById = new Map<LayerId, SmartLayerState>();
 
-  public constructor(db: NoteFlowDatabase, title: string) {
+  public constructor(db: NoteFlowDatabase, title: string = 'Untitled Canvas') {
     this.db = db;
     this.nodeRepo = new SpatialNodeRepository(db);
     this.jobRepo = new AsyncJobRepository(db);
+    this.zettelRepo = new ZettelRepository(db);
     this.jobQueue = new AsyncJobQueue(db, this.nodeRepo, this.jobRepo);
     this.clusterer = new Tier0StrokeClusterer(db, this.nodeRepo, this.jobQueue);
+    this.zettelSyncer = new AutoZettelSyncer(
+      db,
+      this.nodeRepo,
+      this.zettelRepo,
+      this.clusterer
+    );
     this.history = new CommandHistory({
       onCancelJobsForNodes: (ids) => {
         this.jobQueue.cancelJobsForNodes(ids);
@@ -127,10 +140,30 @@ export class CanvasStore {
               colorId: command.params.style.colorId,
             });
           }
+        } else if (
+          command instanceof ClusterStrokesCommand &&
+          command.params.jobType
+        ) {
+          this.jobQueue.enqueueClusterJob({
+            canvasId: command.params.canvasId,
+            anchorClusterId: command.params.clusterId,
+            jobType: command.params.jobType,
+            memberStrokeIds: command.params.memberStrokeIds,
+          });
         }
       },
     });
-    this.canvasId = canvasId(crypto.randomUUID());
+
+    this.syncFromDatabase(title);
+  }
+
+  public get canvasId(): CanvasId {
+    return this._canvasId;
+  }
+
+  public syncFromDatabase(title: string = 'Untitled Canvas'): void {
+    this.layersByType.clear();
+    this.layersById.clear();
 
     const defaultLayers: Array<{
       layerType: LayerType;
@@ -147,32 +180,103 @@ export class CanvasStore {
       { layerType: 'math_formal', name: 'LaTeX & Formal Proofs', zIndex: 3 },
     ];
 
-    for (const def of defaultLayers) {
-      const id = layerId(crypto.randomUUID());
-      this.nodeRepo.ensureCanvasAndLayer({
-        canvasId: this.canvasId,
-        canvasTitle: title,
-        layerId: id,
-        layerName: def.name,
-        layerType: def.layerType,
-        zIndex: def.zIndex,
-      });
-      const state: SmartLayerState = {
-        id,
-        name: def.name,
-        layerType: def.layerType,
-        zIndex: def.zIndex,
-        isVisible: true,
-        isLocked: false,
-        opacity: 1.0,
-      };
-      this.layersByType.set(def.layerType, state);
-      this.layersById.set(id, state);
+    const existingCanvas = this.nodeRepo.getPrimaryCanvasWithLayers();
+    if (existingCanvas) {
+      this._canvasId = existingCanvas.canvasId;
+      try {
+        const parsedCamera = CameraStateSchema.safeParse(
+          JSON.parse(existingCanvas.cameraStateJson)
+        );
+        if (parsedCamera.success) {
+          this._camera = parsedCamera.data;
+        }
+      } catch {
+        // Keep default camera if JSON is malformed
+      }
+
+      for (const l of existingCanvas.layers) {
+        const state: SmartLayerState = {
+          id: l.id,
+          name: l.name,
+          layerType: l.layerType,
+          zIndex: l.zIndex,
+          isVisible: l.isVisible,
+          isLocked: l.isLocked,
+          opacity: l.opacity,
+        };
+        this.layersByType.set(l.layerType, state);
+        this.layersById.set(l.id, state);
+      }
+
+      for (const def of defaultLayers) {
+        if (!this.layersByType.has(def.layerType)) {
+          const id = layerId(crypto.randomUUID());
+          this.nodeRepo.ensureCanvasAndLayer({
+            canvasId: this._canvasId,
+            canvasTitle: existingCanvas.title,
+            layerId: id,
+            layerName: def.name,
+            layerType: def.layerType,
+            zIndex: def.zIndex,
+          });
+          const state: SmartLayerState = {
+            id,
+            name: def.name,
+            layerType: def.layerType,
+            zIndex: def.zIndex,
+            isVisible: true,
+            isLocked: false,
+            opacity: 1.0,
+          };
+          this.layersByType.set(def.layerType, state);
+          this.layersById.set(id, state);
+        }
+      }
+    } else {
+      this._canvasId = canvasId(crypto.randomUUID());
+
+      for (const def of defaultLayers) {
+        const id = layerId(crypto.randomUUID());
+        this.nodeRepo.ensureCanvasAndLayer({
+          canvasId: this._canvasId,
+          canvasTitle: title,
+          layerId: id,
+          layerName: def.name,
+          layerType: def.layerType,
+          zIndex: def.zIndex,
+        });
+        const state: SmartLayerState = {
+          id,
+          name: def.name,
+          layerType: def.layerType,
+          zIndex: def.zIndex,
+          isVisible: true,
+          isLocked: false,
+          opacity: 1.0,
+        };
+        this.layersByType.set(def.layerType, state);
+        this.layersById.set(id, state);
+      }
     }
   }
 
   public static createInMemory(title: string = 'Untitled Canvas'): CanvasStore {
     return new CanvasStore(NoteFlowDatabase.createInMemory(), title);
+  }
+
+  public static fromDatabase(
+    db: NoteFlowDatabase,
+    title: string = 'Untitled Canvas'
+  ): CanvasStore {
+    return new CanvasStore(db, title);
+  }
+
+  public get rotationLocked(): boolean {
+    return this._rotationLocked;
+  }
+
+  public setRotationLocked(locked: boolean): void {
+    this._rotationLocked = locked;
   }
 
   public get camera(): CameraState {
@@ -205,6 +309,16 @@ export class CanvasStore {
 
   public getAllLayers(): readonly SmartLayerState[] {
     return [...this.layersByType.values()].sort((a, b) => a.zIndex - b.zIndex);
+  }
+
+  public getEditableLayerIds(): ReadonlySet<LayerId> {
+    const ids = new Set<LayerId>();
+    for (const layer of this.layersByType.values()) {
+      if (layer.isVisible && !layer.isLocked) {
+        ids.add(layer.id);
+      }
+    }
+    return ids;
   }
 
   public setActiveLayer(type: LayerType): void {
@@ -281,20 +395,34 @@ export class CanvasStore {
       panX: this._camera.panX + dx,
       panY: this._camera.panY + dy,
     };
+    this.nodeRepo.updateCanvasCamera(
+      this._canvasId,
+      JSON.stringify(this._camera)
+    );
   }
 
   public zoomCamera(focal: ScreenPoint, zoomDeltaRatio: number): void {
     this._camera = zoomAroundPoint(this._camera, focal, zoomDeltaRatio);
+    this.nodeRepo.updateCanvasCamera(
+      this._canvasId,
+      JSON.stringify(this._camera)
+    );
   }
 
   public rotateCamera(newRotationRad: number): void {
     this._camera = rotateCameraWithSnap(this._camera, newRotationRad);
+    this.nodeRepo.updateCanvasCamera(
+      this._canvasId,
+      JSON.stringify(this._camera)
+    );
   }
 
   public commitStroke(params: {
     layerId: LayerId;
     points: Float32Array;
     style?: StrokeStyle;
+    ocrText?: string;
+    semanticTags?: readonly string[];
   }): NodeId {
     const targetLayer = this.layersById.get(params.layerId);
     if (targetLayer?.isLocked) {
@@ -312,6 +440,8 @@ export class CanvasStore {
       bbox,
       points: params.points,
       style,
+      ocrText: params.ocrText ?? null,
+      semanticTags: params.semanticTags,
     });
     this.history.execute(cmd);
 
@@ -323,6 +453,11 @@ export class CanvasStore {
     });
 
     return newId;
+  }
+
+  public syncZettelkastenNow(targetLayerId?: LayerId): void {
+    const lId = targetLayerId ?? this.activeLayer.id;
+    this.zettelSyncer.syncLayer(this.canvasId, lId);
   }
 
   /**
@@ -446,12 +581,14 @@ export class CanvasStore {
       if (pt.y > maxY) maxY = pt.y;
     }
 
+    const editableLayerIds = this.getEditableLayerIds();
     const candidates = this.nodeRepo.queryViewportRTree(
       this.canvasId,
       worldAABB(minX, minY, maxX, maxY)
     );
 
     return candidates.filter((node) => {
+      if (!editableLayerIds.has(node.layerId)) return false;
       if (node.strokePoints && node.strokePoints.length >= 2) {
         for (let i = 0; i < node.strokePoints.length; i += 4) {
           const pt = worldPoint(
@@ -511,6 +648,7 @@ export class CanvasStore {
         bbox: worldAABB(minX, minY, maxX, maxY),
         semanticTags: [...tagSet],
         contentJson: { strokeCount: selected.length, trigger: 'circle_to_action' },
+        jobType,
       });
       this.history.execute(clusterCmd);
 

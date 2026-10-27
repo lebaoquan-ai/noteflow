@@ -27,6 +27,8 @@ export interface CommitStrokeParams {
   readonly bbox: WorldAABB;
   readonly points: Float32Array;
   readonly style: StrokeStyle;
+  readonly ocrText?: string | null;
+  readonly semanticTags?: readonly string[];
   readonly createdAt?: number;
 }
 
@@ -81,8 +83,8 @@ export class CommitStrokeCommand implements CanvasCommand {
         strokePoints: new Float32Array(this.params.points),
         style: this.params.style,
         contentJson: null,
-        ocrText: null,
-        semanticTags: [this.params.style.colorId],
+        ocrText: this.params.ocrText ?? null,
+        semanticTags: this.params.semanticTags ?? [this.params.style.colorId],
         createdAt: this.createdTimestamp,
         updatedAt: this.createdTimestamp,
       });
@@ -124,17 +126,23 @@ export interface ClusterStrokesParams {
   readonly semanticTags: readonly string[];
   readonly contentJson: Record<string, unknown>;
   readonly obsoleteClusterIdsToDelete?: readonly NodeId[];
+  readonly jobType?:
+    | 'cluster_ocr'
+    | 'verify_claim'
+    | 'synthesize_zettel'
+    | 'compile_latex';
 }
 
 export class ClusterStrokesCommand implements CanvasCommand {
   public readonly kind = 'CLUSTER_STROKES';
   private beforeSnapshots: SpatialNodeRecord[] = [];
+  private splitClusterIdsCreated: NodeId[] = [];
   private createdNewCluster = false;
 
   public constructor(
     private readonly db: NoteFlowDatabase,
     private readonly repo: SpatialNodeRepository,
-    private readonly params: ClusterStrokesParams
+    public readonly params: ClusterStrokesParams
   ) {}
 
   public get affectedNodeIds(): readonly NodeId[] {
@@ -162,11 +170,16 @@ export class ClusterStrokesCommand implements CanvasCommand {
       }
 
       const priorClusters = this.repo.getByIds([...priorParentClusterIds]);
+      const siblingStrokes =
+        priorParentClusterIds.size > 0
+          ? this.repo.getChildStrokesOfClusters([...priorParentClusterIds])
+          : [];
       const snapshotMap = new Map<NodeId, SpatialNodeRecord>();
       if (existingCluster) {
         snapshotMap.set(existingCluster.id, existingCluster);
       }
       for (const c of priorClusters) snapshotMap.set(c.id, c);
+      for (const sib of siblingStrokes) snapshotMap.set(sib.id, sib);
       for (const s of strokes) snapshotMap.set(s.id, s);
       this.beforeSnapshots = [...snapshotMap.values()];
 
@@ -207,13 +220,21 @@ export class ClusterStrokesCommand implements CanvasCommand {
         (id) => !obsoleteIds.includes(id)
       );
       if (remainingPriorClusters.length > 0) {
-        this.repo.pruneOrUpdateParentClusters(remainingPriorClusters);
+        this.splitClusterIdsCreated = this.repo.pruneOrUpdateParentClusters(
+          remainingPriorClusters
+        );
+      } else {
+        this.splitClusterIdsCreated = [];
       }
     });
   }
 
   public undo(): void {
     this.db.transaction(() => {
+      if (this.splitClusterIdsCreated.length > 0) {
+        this.repo.deleteByIds(this.splitClusterIdsCreated);
+        this.splitClusterIdsCreated = [];
+      }
       if (this.beforeSnapshots.length > 0) {
         this.repo.restoreSnapshots(this.beforeSnapshots);
       }
@@ -402,5 +423,10 @@ export class CommandHistory {
 
   public get canRedo(): boolean {
     return this.redoStack.length > 0;
+  }
+
+  public clear(): void {
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
   }
 }

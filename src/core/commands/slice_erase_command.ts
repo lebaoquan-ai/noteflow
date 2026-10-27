@@ -2,6 +2,7 @@ import {
   nodeId,
   worldAABB,
   type CanvasId,
+  type LayerId,
   type NodeId,
   type WorldPoint,
 } from '../canvas/types.js';
@@ -66,7 +67,8 @@ export class SliceEraseCommand implements CanvasCommand {
     private readonly bladeStart: WorldPoint,
     private readonly bladeEnd: WorldPoint,
     private readonly eraserRadius: number = 4.0,
-    public readonly gestureId?: number
+    public readonly gestureId?: number,
+    private readonly editableLayerIds?: ReadonlySet<LayerId>
   ) {}
 
   public get affectedNodeIds(): readonly NodeId[] {
@@ -105,7 +107,13 @@ export class SliceEraseCommand implements CanvasCommand {
 
     const candidates = this.repo
       .queryViewportRTree(this.canvasId, worldAABB(minX, minY, maxX, maxY))
-      .filter((n) => n.nodeType === 'vector_stroke' && n.strokePoints !== null);
+      .filter(
+        (n) =>
+          n.nodeType === 'vector_stroke' &&
+          n.strokePoints !== null &&
+          (this.editableLayerIds === undefined ||
+            this.editableLayerIds.has(n.layerId))
+      );
 
     this.deletedSnapshots = [];
     this.parentClusterSnapshots = [];

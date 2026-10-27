@@ -750,6 +750,113 @@ describe('Newcomer Code Review Violations A–E Regression Suite', () => {
         .filter((n) => n.nodeType === 'zettel_card')
     ).toHaveLength(1);
 
+    // Undoing the Zettel synthesis removes the zettel_card and allows re-synthesizing from the badge
+    expect(store.history.undo()).toBe(true);
+    expect(
+      store.nodeRepo
+        .getAllForCanvas(store.canvasId)
+        .filter((n) => n.nodeType === 'zettel_card')
+    ).toHaveLength(0);
+    const reSynthesizedCardId = synthesizeZettelForBadge(store, zettelRepo, badge.id);
+    expect(reSynthesizedCardId).not.toBeNull();
+    expect(
+      store.nodeRepo
+        .getAllForCanvas(store.canvasId)
+        .filter((n) => n.nodeType === 'zettel_card')
+    ).toHaveLength(1);
+
+    store.close();
+  });
+
+  it('Phase 4D: SliceEraseCommand and selectNodesInLasso ignore hidden/locked layers, and redoing triggerCircleToAction restores its AI badge', () => {
+    const store = CanvasStore.createInMemory('Phase 4D Layer Isolation & Circle-to-Action Redo Test');
+    const notesLayer = store.getLayerByType('notes');
+    const hintsLayer = store.getLayerByType('hints_work');
+    const mathLayer = store.getLayerByType('math_formal');
+
+    const notesStrokeId = store.commitStroke({
+      layerId: notesLayer.id,
+      points: new Float32Array([10, 50, 0.6, 1, 100, 50, 0.6, 2]),
+    });
+    const hintsStrokeId = store.commitStroke({
+      layerId: hintsLayer.id,
+      points: new Float32Array([10, 55, 0.6, 3, 100, 55, 0.6, 4]),
+    });
+    const mathStrokeId = store.commitStroke({
+      layerId: mathLayer.id,
+      points: new Float32Array([10, 60, 0.6, 5, 100, 60, 0.6, 6]),
+    });
+
+    // Hide hints_work via Teaching Mode and lock math_formal
+    store.setTeachingMode(true);
+    store.setLayerLocked('math_formal', true);
+
+    const lassoPolygon = [
+      worldPoint(0, 0),
+      worldPoint(120, 0),
+      worldPoint(120, 100),
+      worldPoint(0, 100),
+    ];
+
+    // 1. selectNodesInLasso must only select strokes on visible, unlocked layers (notesLayer)
+    const lassoed = store.selectNodesInLasso(lassoPolygon);
+    expect(lassoed.map((n) => n.id)).toEqual([notesStrokeId]);
+
+    // 2. Stylus Slice Eraser drag across (50, 20) -> (50, 80) must slice notesStrokeId
+    // while leaving hintsStrokeId (hidden) and mathStrokeId (locked) untouched
+    store.selectRadialTool('stroke_eraser');
+    const bridge = new TabletPointerBridge(store);
+    bridge.handlePointerDown({
+      pointerId: 1,
+      pointerType: 'pen',
+      clientX: 50,
+      clientY: 20,
+      pressure: 0.7,
+      timeStamp: 10,
+    });
+    bridge.handlePointerMove({
+      pointerId: 1,
+      pointerType: 'pen',
+      clientX: 50,
+      clientY: 80,
+      pressure: 0.7,
+      timeStamp: 20,
+    });
+    bridge.handlePointerUp({
+      pointerId: 1,
+      pointerType: 'pen',
+      clientX: 50,
+      clientY: 80,
+      pressure: 0,
+      timeStamp: 30,
+    });
+
+    expect(store.nodeRepo.getById(notesStrokeId)).toBeNull();
+    expect(store.nodeRepo.getById(hintsStrokeId)).not.toBeNull();
+    expect(store.nodeRepo.getById(mathStrokeId)).not.toBeNull();
+
+    // Undo the slice so notesStrokeId is restored
+    expect(store.history.undo()).toBe(true);
+    expect(store.nodeRepo.getById(notesStrokeId)).not.toBeNull();
+
+    // 3. Circle-to-Action creates a manual cluster and enqueues a synthesize_zettel badge
+    const c2aBadge = store.triggerCircleToAction(lassoPolygon, 'synthesize_zettel');
+    expect(c2aBadge).not.toBeNull();
+    expect(store.jobRepo.getBadgesForCanvas(store.canvasId)).toHaveLength(1);
+    expect(store.jobRepo.getBadgesForCanvas(store.canvasId)[0]!.jobType).toBe(
+      'synthesize_zettel'
+    );
+
+    // Undo removes the manual cluster and cancels its badge
+    expect(store.history.undo()).toBe(true);
+    expect(store.jobRepo.getBadgesForCanvas(store.canvasId)).toHaveLength(0);
+
+    // Redo restores the manual cluster AND re-enqueues its synthesize_zettel badge
+    expect(store.history.redo()).toBe(true);
+    const redoneBadges = store.jobRepo.getBadgesForCanvas(store.canvasId);
+    expect(redoneBadges).toHaveLength(1);
+    expect(redoneBadges[0]!.jobType).toBe('synthesize_zettel');
+
     store.close();
   });
 });

@@ -1,4 +1,157 @@
+import { z } from 'zod';
 import type { SqlEnginePort, SqlStatementPort } from './engine_port.js';
+
+export const BrowserSqlSnapshotSchema = z.object({
+  version: z.literal(1),
+  nextRowId: z.number().int().positive(),
+  canvases: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      camera_state_json: z.string(),
+      updated_at: z.number(),
+    })
+  ),
+  layers: z.array(
+    z.object({
+      id: z.string(),
+      canvas_id: z.string(),
+      name: z.string(),
+      layer_type: z.string(),
+      z_index: z.number(),
+      is_visible: z.number(),
+      is_locked: z.number(),
+      opacity: z.number(),
+    })
+  ),
+  spatialNodes: z.array(
+    z.object({
+      rowid: z.number().int().positive(),
+      id: z.string(),
+      canvas_id: z.string(),
+      layer_id: z.string(),
+      node_type: z.string(),
+      parent_cluster_id: z.string().nullable(),
+      min_x: z.number(),
+      min_y: z.number(),
+      max_x: z.number(),
+      max_y: z.number(),
+      stroke_points_bytes: z.array(z.number().int().min(0).max(255)).nullable(),
+      style_json: z.string().nullable(),
+      content_json: z.string().nullable(),
+      ocr_text: z.string().nullable(),
+      semantic_tags_json: z.string().nullable(),
+      created_at: z.number(),
+      updated_at: z.number(),
+    })
+  ),
+  asyncJobs: z.array(
+    z.object({
+      id: z.string(),
+      canvas_id: z.string(),
+      anchor_node_id: z.string(),
+      job_type: z.string(),
+      status: z.string(),
+      result_json: z.string().nullable(),
+      created_at: z.number(),
+      updated_at: z.number(),
+    })
+  ),
+  zettels: z.array(
+    z.object({
+      id: z.string(),
+      spatial_node_id: z.string().nullable(),
+      title: z.string(),
+      summary_markdown: z.string(),
+      latex_blocks_json: z.string().nullable(),
+      verification_state: z.string(),
+      embedding_bytes: z.array(z.number().int().min(0).max(255)).nullable(),
+      created_at: z.number(),
+      updated_at: z.number(),
+    })
+  ),
+  zettelLinks: z.array(
+    z.object({
+      id: z.string(),
+      source_zettel_id: z.string(),
+      target_zettel_id: z.string(),
+      relation_type: z.string(),
+      confidence: z.number(),
+    })
+  ),
+  canvasBlocks: z
+    .array(
+      z.object({
+        id: z.string(),
+        canvas_id: z.string(),
+        spatial_node_id: z.string(),
+        modality: z.string(),
+        raw_text: z.string(),
+        structured_json: z.string().nullable(),
+        min_x: z.number(),
+        min_y: z.number(),
+        max_x: z.number(),
+        max_y: z.number(),
+        updated_at: z.number(),
+      })
+    )
+    .default([]),
+  zettelKeywords: z
+    .array(
+      z.object({
+        id: z.string(),
+        canvas_id: z.string(),
+        zettel_id: z.string(),
+        source_block_id: z.string(),
+        keyword_text: z.string(),
+        normalized_keyword: z.string(),
+        marker_type: z.string(),
+        is_primary_concept: z.number(),
+        created_at: z.number(),
+      })
+    )
+    .default([]),
+  zettelEvidenceLinks: z
+    .array(
+      z.object({
+        id: z.string(),
+        zettel_id: z.string(),
+        block_id: z.string(),
+        evidence_role: z.string(),
+        confidence: z.number(),
+        created_at: z.number(),
+      })
+    )
+    .default([]),
+  spatialRelations: z
+    .array(
+      z.object({
+        id: z.string(),
+        canvas_id: z.string(),
+        connector_stroke_id: z.string(),
+        source_node_id: z.string(),
+        target_node_id: z.string(),
+        relation_type: z.string(),
+        created_at: z.number(),
+      })
+    )
+    .default([]),
+  agendaTasks: z
+    .array(
+      z.object({
+        id: z.string(),
+        canvas_id: z.string(),
+        source_node_id: z.string(),
+        task_text: z.string(),
+        due_date_iso: z.string().nullable(),
+        status: z.string(),
+        created_at: z.number(),
+      })
+    )
+    .default([]),
+});
+
+export type BrowserSqlSnapshot = z.infer<typeof BrowserSqlSnapshotSchema>;
 
 interface SpatialNodeRow {
   rowid: number;
@@ -59,6 +212,61 @@ interface ZettelLinkRow {
   confidence: number;
 }
 
+interface CanvasBlockRow {
+  id: string;
+  canvas_id: string;
+  spatial_node_id: string;
+  modality: string;
+  raw_text: string;
+  structured_json: string | null;
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+  updated_at: number;
+}
+
+interface ZettelKeywordRow {
+  id: string;
+  canvas_id: string;
+  zettel_id: string;
+  source_block_id: string;
+  keyword_text: string;
+  normalized_keyword: string;
+  marker_type: string;
+  is_primary_concept: number;
+  created_at: number;
+}
+
+interface ZettelEvidenceLinkRow {
+  id: string;
+  zettel_id: string;
+  block_id: string;
+  evidence_role: string;
+  confidence: number;
+  created_at: number;
+}
+
+interface SpatialRelationRow {
+  id: string;
+  canvas_id: string;
+  connector_stroke_id: string;
+  source_node_id: string;
+  target_node_id: string;
+  relation_type: string;
+  created_at: number;
+}
+
+interface AgendaTaskRow {
+  id: string;
+  canvas_id: string;
+  source_node_id: string;
+  task_text: string;
+  due_date_iso: string | null;
+  status: string;
+  created_at: number;
+}
+
 interface EngineSnapshot {
   readonly label: string;
   readonly nextRowId: number;
@@ -69,6 +277,11 @@ interface EngineSnapshot {
   readonly asyncJobs: Map<string, AsyncJobRow>;
   readonly zettels: Map<string, ZettelRow>;
   readonly zettelLinks: Map<string, ZettelLinkRow>;
+  readonly canvasBlocks: Map<string, CanvasBlockRow>;
+  readonly zettelKeywords: Map<string, ZettelKeywordRow>;
+  readonly zettelEvidenceLinks: Map<string, ZettelEvidenceLinkRow>;
+  readonly spatialRelations: Map<string, SpatialRelationRow>;
+  readonly agendaTasks: Map<string, AgendaTaskRow>;
 }
 
 const SPATIAL_CELL_SIZE = 256;
@@ -237,7 +450,166 @@ export class BrowserSqlEngine implements SqlEnginePort {
   private asyncJobs = new Map<string, AsyncJobRow>();
   private zettels = new Map<string, ZettelRow>();
   private zettelLinks = new Map<string, ZettelLinkRow>();
+  private canvasBlocks = new Map<string, CanvasBlockRow>();
+  private zettelKeywords = new Map<string, ZettelKeywordRow>();
+  private zettelEvidenceLinks = new Map<string, ZettelEvidenceLinkRow>();
+  private spatialRelations = new Map<string, SpatialRelationRow>();
+  private agendaTasks = new Map<string, AgendaTaskRow>();
   private readonly transactionStack: EngineSnapshot[] = [];
+  public onMutation?: () => void;
+
+  public exportSnapshot(): BrowserSqlSnapshot {
+    return BrowserSqlSnapshotSchema.parse({
+      version: 1,
+      nextRowId: this.nextRowId,
+      canvases: [...this.canvases.values()].map((c) => ({
+        id: String(c.id),
+        title: String(c.title),
+        camera_state_json: String(c.camera_state_json),
+        updated_at: Number(c.updated_at),
+      })),
+      layers: [...this.layers.values()].map((l) => ({
+        id: String(l.id),
+        canvas_id: String(l.canvas_id),
+        name: String(l.name),
+        layer_type: String(l.layer_type),
+        z_index: Number(l.z_index),
+        is_visible: Number(l.is_visible),
+        is_locked: Number(l.is_locked),
+        opacity: Number(l.opacity),
+      })),
+      spatialNodes: [...this.spatialNodes.values()].map((n) => ({
+        rowid: n.rowid,
+        id: n.id,
+        canvas_id: n.canvas_id,
+        layer_id: n.layer_id,
+        node_type: n.node_type,
+        parent_cluster_id: n.parent_cluster_id,
+        min_x: n.min_x,
+        min_y: n.min_y,
+        max_x: n.max_x,
+        max_y: n.max_y,
+        stroke_points_bytes: n.stroke_points
+          ? Array.from(n.stroke_points)
+          : null,
+        style_json: n.style_json,
+        content_json: n.content_json,
+        ocr_text: n.ocr_text,
+        semantic_tags_json: n.semantic_tags_json,
+        created_at: n.created_at,
+        updated_at: n.updated_at,
+      })),
+      asyncJobs: [...this.asyncJobs.values()].map((j) => ({ ...j })),
+      zettels: [...this.zettels.values()].map((zRow) => ({
+        id: zRow.id,
+        spatial_node_id: zRow.spatial_node_id,
+        title: zRow.title,
+        summary_markdown: zRow.summary_markdown,
+        latex_blocks_json: zRow.latex_blocks_json,
+        verification_state: zRow.verification_state,
+        embedding_bytes: zRow.embedding ? Array.from(zRow.embedding) : null,
+        created_at: zRow.created_at,
+        updated_at: zRow.updated_at,
+      })),
+      zettelLinks: [...this.zettelLinks.values()].map((l) => ({ ...l })),
+      canvasBlocks: [...this.canvasBlocks.values()].map((b) => ({ ...b })),
+      zettelKeywords: [...this.zettelKeywords.values()].map((k) => ({ ...k })),
+      zettelEvidenceLinks: [...this.zettelEvidenceLinks.values()].map((e) => ({
+        ...e,
+      })),
+      spatialRelations: [...this.spatialRelations.values()].map((r) => ({
+        ...r,
+      })),
+      agendaTasks: [...this.agendaTasks.values()].map((t) => ({ ...t })),
+    });
+  }
+
+  public importSnapshot(raw: unknown): void {
+    const parsed = BrowserSqlSnapshotSchema.parse(raw);
+    this.close();
+    this.nextRowId = parsed.nextRowId;
+
+    for (const c of parsed.canvases) {
+      this.canvases.set(c.id, { ...c });
+    }
+    for (const l of parsed.layers) {
+      this.layers.set(l.id, { ...l });
+    }
+    for (const n of parsed.spatialNodes) {
+      const row: SpatialNodeRow = {
+        rowid: n.rowid,
+        id: n.id,
+        canvas_id: n.canvas_id,
+        layer_id: n.layer_id,
+        node_type: n.node_type,
+        parent_cluster_id: n.parent_cluster_id,
+        min_x: n.min_x,
+        min_y: n.min_y,
+        max_x: n.max_x,
+        max_y: n.max_y,
+        stroke_points: n.stroke_points_bytes
+          ? new Uint8Array(n.stroke_points_bytes)
+          : null,
+        style_json: n.style_json,
+        content_json: n.content_json,
+        ocr_text: n.ocr_text,
+        semantic_tags_json: n.semantic_tags_json,
+        created_at: n.created_at,
+        updated_at: n.updated_at,
+      };
+      this.spatialNodes.set(row.id, row);
+      this.spatialNodesByRowId.set(row.rowid, row);
+      const rtreeEntry: RTreeEntry = {
+        id: row.rowid,
+        min_x: row.min_x,
+        max_x: row.max_x,
+        min_y: row.min_y,
+        max_y: row.max_y,
+      };
+      this.rtree.set(row.rowid, rtreeEntry);
+      this.spatialIndex.upsert(rtreeEntry);
+      if (row.rowid >= this.nextRowId) {
+        this.nextRowId = row.rowid + 1;
+      }
+    }
+    for (const j of parsed.asyncJobs) {
+      this.asyncJobs.set(j.id, { ...j });
+    }
+    for (const zRow of parsed.zettels) {
+      this.zettels.set(zRow.id, {
+        id: zRow.id,
+        spatial_node_id: zRow.spatial_node_id,
+        title: zRow.title,
+        summary_markdown: zRow.summary_markdown,
+        latex_blocks_json: zRow.latex_blocks_json,
+        verification_state: zRow.verification_state,
+        embedding: zRow.embedding_bytes
+          ? new Uint8Array(zRow.embedding_bytes)
+          : null,
+        created_at: zRow.created_at,
+        updated_at: zRow.updated_at,
+      });
+    }
+    for (const l of parsed.zettelLinks) {
+      const key = `${l.source_zettel_id}::${l.target_zettel_id}::${l.relation_type}`;
+      this.zettelLinks.set(key, { ...l });
+    }
+    for (const b of parsed.canvasBlocks) {
+      this.canvasBlocks.set(b.id, { ...b });
+    }
+    for (const k of parsed.zettelKeywords) {
+      this.zettelKeywords.set(k.id, { ...k });
+    }
+    for (const e of parsed.zettelEvidenceLinks) {
+      this.zettelEvidenceLinks.set(`${e.zettel_id}::${e.block_id}`, { ...e });
+    }
+    for (const r of parsed.spatialRelations) {
+      this.spatialRelations.set(r.id, { ...r });
+    }
+    for (const t of parsed.agendaTasks) {
+      this.agendaTasks.set(t.id, { ...t });
+    }
+  }
 
   public exec(sql: string): void {
     const normalized = sql.replace(/\s+/g, ' ').trim();
@@ -247,6 +619,9 @@ export class BrowserSqlEngine implements SqlEnginePort {
     }
     if (normalized === 'COMMIT;') {
       this.popSnapshot('ROOT');
+      if (this.transactionStack.length === 0) {
+        this.onMutation?.();
+      }
       return;
     }
     if (normalized === 'ROLLBACK;') {
@@ -286,6 +661,11 @@ export class BrowserSqlEngine implements SqlEnginePort {
     this.asyncJobs.clear();
     this.zettels.clear();
     this.zettelLinks.clear();
+    this.canvasBlocks.clear();
+    this.zettelKeywords.clear();
+    this.zettelEvidenceLinks.clear();
+    this.spatialRelations.clear();
+    this.agendaTasks.clear();
     this.transactionStack.length = 0;
   }
 
@@ -293,7 +673,12 @@ export class BrowserSqlEngine implements SqlEnginePort {
     const normalized = sql.replace(/\s+/g, ' ').trim();
 
     return {
-      run: (...params: unknown[]) => this.executeRun(normalized, params),
+      run: (...params: unknown[]) => {
+        this.executeRun(normalized, params);
+        if (this.transactionStack.length === 0) {
+          this.onMutation?.();
+        }
+      },
       get: (...params: unknown[]) => this.executeGet(normalized, params),
       all: (...params: unknown[]) => this.executeAll(normalized, params),
     };
@@ -321,6 +706,21 @@ export class BrowserSqlEngine implements SqlEnginePort {
       ),
       zettelLinks: new Map(
         [...this.zettelLinks.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      canvasBlocks: new Map(
+        [...this.canvasBlocks.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      zettelKeywords: new Map(
+        [...this.zettelKeywords.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      zettelEvidenceLinks: new Map(
+        [...this.zettelEvidenceLinks.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      spatialRelations: new Map(
+        [...this.spatialRelations.entries()].map(([k, v]) => [k, { ...v }])
+      ),
+      agendaTasks: new Map(
+        [...this.agendaTasks.entries()].map(([k, v]) => [k, { ...v }])
       ),
     });
   }
@@ -351,6 +751,11 @@ export class BrowserSqlEngine implements SqlEnginePort {
         this.asyncJobs = snap.asyncJobs;
         this.zettels = snap.zettels;
         this.zettelLinks = snap.zettelLinks;
+        this.canvasBlocks = snap.canvasBlocks;
+        this.zettelKeywords = snap.zettelKeywords;
+        this.zettelEvidenceLinks = snap.zettelEvidenceLinks;
+        this.spatialRelations = snap.spatialRelations;
+        this.agendaTasks = snap.agendaTasks;
         this.transactionStack.splice(i);
         return;
       }
@@ -371,6 +776,19 @@ export class BrowserSqlEngine implements SqlEnginePort {
       return;
     }
 
+    if (
+      sql ===
+      'UPDATE canvases SET camera_state_json = ?, updated_at = ? WHERE id = ?'
+    ) {
+      const id = String(params[2]);
+      const existing = this.canvases.get(id);
+      if (existing) {
+        existing.camera_state_json = String(params[0]);
+        existing.updated_at = Number(params[1]);
+      }
+      return;
+    }
+
     if (sql.startsWith('INSERT OR IGNORE INTO layers')) {
       const id = String(params[0]);
       if (!this.layers.has(id)) {
@@ -380,6 +798,9 @@ export class BrowserSqlEngine implements SqlEnginePort {
           name: params[2],
           layer_type: params[3],
           z_index: Number(params[4]),
+          is_visible: 1,
+          is_locked: 0,
+          opacity: 1,
         });
       }
       return;
@@ -550,6 +971,59 @@ export class BrowserSqlEngine implements SqlEnginePort {
           zettel.spatial_node_id = null;
         }
       }
+
+      // ON DELETE CASCADE on canvas_blocks.spatial_node_id
+      const deletedBlockIds = new Set<string>();
+      for (const [blockId, block] of this.canvasBlocks.entries()) {
+        if (idsToDelete.has(block.spatial_node_id)) {
+          this.canvasBlocks.delete(blockId);
+          deletedBlockIds.add(blockId);
+        }
+      }
+      if (deletedBlockIds.size > 0) {
+        for (const [kwId, kw] of this.zettelKeywords.entries()) {
+          if (deletedBlockIds.has(kw.source_block_id)) {
+            this.zettelKeywords.delete(kwId);
+          }
+        }
+        for (const [evKey, ev] of this.zettelEvidenceLinks.entries()) {
+          if (deletedBlockIds.has(ev.block_id)) {
+            this.zettelEvidenceLinks.delete(evKey);
+          }
+        }
+      }
+
+      // ON DELETE CASCADE on spatial_relations
+      for (const [relId, rel] of this.spatialRelations.entries()) {
+        if (
+          idsToDelete.has(rel.connector_stroke_id) ||
+          idsToDelete.has(rel.source_node_id) ||
+          idsToDelete.has(rel.target_node_id)
+        ) {
+          this.spatialRelations.delete(relId);
+        }
+      }
+
+      // ON DELETE CASCADE on agenda_tasks
+      for (const [taskId, task] of this.agendaTasks.entries()) {
+        if (idsToDelete.has(task.source_node_id)) {
+          this.agendaTasks.delete(taskId);
+        }
+      }
+      return;
+    }
+
+    if (
+      sql ===
+      'UPDATE spatial_nodes SET content_json = ?, ocr_text = ?, semantic_tags_json = ?, updated_at = ? WHERE id = ?'
+    ) {
+      const row = this.spatialNodes.get(String(params[4]));
+      if (row) {
+        row.content_json = (params[0] as string | null) ?? null;
+        row.ocr_text = (params[1] as string | null) ?? null;
+        row.semantic_tags_json = (params[2] as string | null) ?? null;
+        row.updated_at = Number(params[3]);
+      }
       return;
     }
 
@@ -620,6 +1094,31 @@ export class BrowserSqlEngine implements SqlEnginePort {
           this.zettelLinks.delete(key);
         }
       }
+      for (const [kwId, kw] of this.zettelKeywords.entries()) {
+        if (kw.zettel_id === id) {
+          this.zettelKeywords.delete(kwId);
+        }
+      }
+      for (const [evKey, ev] of this.zettelEvidenceLinks.entries()) {
+        if (ev.zettel_id === id) {
+          this.zettelEvidenceLinks.delete(evKey);
+        }
+      }
+      return;
+    }
+
+    if (
+      sql ===
+      'UPDATE zettels SET spatial_node_id = ?, title = ?, summary_markdown = ?, verification_state = ?, updated_at = ? WHERE id = ?'
+    ) {
+      const existing = this.zettels.get(String(params[5]));
+      if (existing) {
+        existing.spatial_node_id = (params[0] as string | null) ?? null;
+        existing.title = String(params[1]);
+        existing.summary_markdown = String(params[2]);
+        existing.verification_state = String(params[3]);
+        existing.updated_at = Number(params[4]);
+      }
       return;
     }
 
@@ -651,10 +1150,160 @@ export class BrowserSqlEngine implements SqlEnginePort {
       return;
     }
 
+    if (sql.startsWith('INSERT OR REPLACE INTO canvas_blocks')) {
+      const id = String(params[0]);
+      const spatialNodeId = String(params[2]);
+      // Ensure UNIQUE(spatial_node_id)
+      for (const [existingId, b] of this.canvasBlocks.entries()) {
+        if (b.spatial_node_id === spatialNodeId && existingId !== id) {
+          this.canvasBlocks.delete(existingId);
+        }
+      }
+      this.canvasBlocks.set(id, {
+        id,
+        canvas_id: String(params[1]),
+        spatial_node_id: spatialNodeId,
+        modality: String(params[3]),
+        raw_text: String(params[4]),
+        structured_json: (params[5] as string | null) ?? null,
+        min_x: Number(params[6]),
+        min_y: Number(params[7]),
+        max_x: Number(params[8]),
+        max_y: Number(params[9]),
+        updated_at: Number(params[10]),
+      });
+      return;
+    }
+
+    if (sql === 'DELETE FROM canvas_blocks WHERE id = ?') {
+      const blockId = String(params[0]);
+      this.canvasBlocks.delete(blockId);
+      for (const [kwId, kw] of this.zettelKeywords.entries()) {
+        if (kw.source_block_id === blockId) {
+          this.zettelKeywords.delete(kwId);
+        }
+      }
+      for (const [evKey, ev] of this.zettelEvidenceLinks.entries()) {
+        if (ev.block_id === blockId) {
+          this.zettelEvidenceLinks.delete(evKey);
+        }
+      }
+      return;
+    }
+
+    if (sql === 'DELETE FROM zettel_keywords WHERE canvas_id = ?') {
+      const canvasId = String(params[0]);
+      for (const [kwId, kw] of this.zettelKeywords.entries()) {
+        if (kw.canvas_id === canvasId) {
+          this.zettelKeywords.delete(kwId);
+        }
+      }
+      return;
+    }
+
+    if (sql.startsWith('INSERT OR REPLACE INTO zettel_keywords')) {
+      const id = String(params[0]);
+      this.zettelKeywords.set(id, {
+        id,
+        canvas_id: String(params[1]),
+        zettel_id: String(params[2]),
+        source_block_id: String(params[3]),
+        keyword_text: String(params[4]),
+        normalized_keyword: String(params[5]),
+        marker_type: String(params[6]),
+        is_primary_concept: Number(params[7]),
+        created_at: Number(params[8]),
+      });
+      return;
+    }
+
+    if (sql === 'DELETE FROM zettel_evidence_links WHERE zettel_id = ?') {
+      const zId = String(params[0]);
+      for (const [evKey, ev] of this.zettelEvidenceLinks.entries()) {
+        if (ev.zettel_id === zId) {
+          this.zettelEvidenceLinks.delete(evKey);
+        }
+      }
+      return;
+    }
+
+    if (sql.startsWith('INSERT OR REPLACE INTO zettel_evidence_links')) {
+      const id = String(params[0]);
+      const zettelId = String(params[1]);
+      const blockId = String(params[2]);
+      this.zettelEvidenceLinks.set(`${zettelId}::${blockId}`, {
+        id,
+        zettel_id: zettelId,
+        block_id: blockId,
+        evidence_role: String(params[3]),
+        confidence: Number(params[4]),
+        created_at: Number(params[5]),
+      });
+      return;
+    }
+
+    if (sql === 'DELETE FROM spatial_relations WHERE canvas_id = ?') {
+      const canvasId = String(params[0]);
+      for (const [relId, rel] of this.spatialRelations.entries()) {
+        if (rel.canvas_id === canvasId) {
+          this.spatialRelations.delete(relId);
+        }
+      }
+      return;
+    }
+
+    if (sql.startsWith('INSERT OR REPLACE INTO spatial_relations')) {
+      const id = String(params[0]);
+      this.spatialRelations.set(id, {
+        id,
+        canvas_id: String(params[1]),
+        connector_stroke_id: String(params[2]),
+        source_node_id: String(params[3]),
+        target_node_id: String(params[4]),
+        relation_type: String(params[5]),
+        created_at: Number(params[6]),
+      });
+      return;
+    }
+
+    if (sql === 'DELETE FROM agenda_tasks WHERE canvas_id = ?') {
+      const canvasId = String(params[0]);
+      for (const [taskId, task] of this.agendaTasks.entries()) {
+        if (task.canvas_id === canvasId) {
+          this.agendaTasks.delete(taskId);
+        }
+      }
+      return;
+    }
+
+    if (sql.startsWith('INSERT OR REPLACE INTO agenda_tasks')) {
+      const id = String(params[0]);
+      this.agendaTasks.set(id, {
+        id,
+        canvas_id: String(params[1]),
+        source_node_id: String(params[2]),
+        task_text: String(params[3]),
+        due_date_iso: (params[4] as string | null) ?? null,
+        status: String(params[5]),
+        created_at: Number(params[6]),
+      });
+      return;
+    }
+
     throw new Error(`BrowserSqlEngine: unsupported run() SQL statement: ${sql}`);
   }
 
   private executeGet(sql: string, params: unknown[]): unknown {
+    if (
+      sql ===
+      'SELECT id, title, camera_state_json, updated_at FROM canvases ORDER BY updated_at DESC LIMIT 1'
+    ) {
+      const all = [...this.canvases.values()].sort(
+        (a, b) => Number(b.updated_at ?? 0) - Number(a.updated_at ?? 0)
+      );
+      return all.length > 0 ? { ...all[0] } : undefined;
+    }
+
     if (sql === 'SELECT * FROM spatial_nodes WHERE id = ?') {
       const row = this.spatialNodes.get(String(params[0]));
       return row ? { ...row } : undefined;
@@ -691,10 +1340,97 @@ export class BrowserSqlEngine implements SqlEnginePort {
       return row ? { ...row } : undefined;
     }
 
+    if (
+      sql ===
+      'SELECT * FROM canvas_blocks WHERE spatial_node_id = ?'
+    ) {
+      const spatialNodeId = String(params[0]);
+      for (const b of this.canvasBlocks.values()) {
+        if (b.spatial_node_id === spatialNodeId) {
+          return { ...b };
+        }
+      }
+      return undefined;
+    }
+
     throw new Error(`BrowserSqlEngine: unsupported get() SQL statement: ${sql}`);
   }
 
   private executeAll(sql: string, params: unknown[]): unknown[] {
+    if (
+      sql ===
+      'SELECT * FROM canvas_blocks WHERE canvas_id = ? ORDER BY min_y ASC, min_x ASC'
+    ) {
+      const canvasId = String(params[0]);
+      return [...this.canvasBlocks.values()]
+        .filter((b) => b.canvas_id === canvasId)
+        .sort((a, b) => a.min_y - b.min_y || a.min_x - b.min_x)
+        .map((b) => ({ ...b }));
+    }
+
+    if (
+      sql ===
+      'SELECT * FROM zettel_keywords WHERE canvas_id = ? ORDER BY created_at ASC'
+    ) {
+      const canvasId = String(params[0]);
+      return [...this.zettelKeywords.values()]
+        .filter((k) => k.canvas_id === canvasId)
+        .sort((a, b) => a.created_at - b.created_at)
+        .map((k) => ({ ...k }));
+    }
+
+    if (
+      sql ===
+      'SELECT * FROM zettel_evidence_links WHERE zettel_id = ? ORDER BY confidence DESC, created_at ASC'
+    ) {
+      const zId = String(params[0]);
+      return [...this.zettelEvidenceLinks.values()]
+        .filter((e) => e.zettel_id === zId)
+        .sort((a, b) => b.confidence - a.confidence || a.created_at - b.created_at)
+        .map((e) => ({ ...e }));
+    }
+
+    if (
+      sql ===
+      'SELECT * FROM spatial_relations WHERE canvas_id = ? ORDER BY created_at ASC'
+    ) {
+      const canvasId = String(params[0]);
+      return [...this.spatialRelations.values()]
+        .filter((r) => r.canvas_id === canvasId)
+        .sort((a, b) => a.created_at - b.created_at)
+        .map((r) => ({ ...r }));
+    }
+
+    if (
+      sql ===
+      'SELECT * FROM agenda_tasks WHERE canvas_id = ? ORDER BY created_at ASC'
+    ) {
+      const canvasId = String(params[0]);
+      return [...this.agendaTasks.values()]
+        .filter((t) => t.canvas_id === canvasId)
+        .sort((a, b) => a.created_at - b.created_at)
+        .map((t) => ({ ...t }));
+    }
+    if (
+      sql ===
+      'SELECT id, canvas_id, name, layer_type, z_index, is_visible, is_locked, opacity FROM layers WHERE canvas_id = ? ORDER BY z_index ASC'
+    ) {
+      const canvasId = String(params[0]);
+      return [...this.layers.values()]
+        .filter((l) => String(l.canvas_id) === canvasId)
+        .sort((a, b) => Number(a.z_index ?? 0) - Number(b.z_index ?? 0))
+        .map((l) => ({
+          id: String(l.id),
+          canvas_id: String(l.canvas_id),
+          name: String(l.name),
+          layer_type: String(l.layer_type),
+          z_index: Number(l.z_index ?? 0),
+          is_visible: Number(l.is_visible ?? 1),
+          is_locked: Number(l.is_locked ?? 0),
+          opacity: Number(l.opacity ?? 1),
+        }));
+    }
+
     if (sql.startsWith('SELECT * FROM spatial_nodes WHERE id IN')) {
       const ids = new Set(params.map(String));
       return [...this.spatialNodes.values()]

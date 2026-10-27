@@ -19,6 +19,7 @@ import type {
   SpatialNodeRepository,
 } from '../../db/repositories/spatial_node_repository.js';
 import type { AsyncJobQueue } from '../../state/async_job_queue.js';
+import { detectPointingArrowStroke } from '../ink_recognition/vector_topology_analyzer.js';
 
 export const TIER0_DEBOUNCE_MS = 1200;
 export const CLUSTER_MAX_GAP_X = STROKE_CLUSTER_MAX_GAP_X;
@@ -90,9 +91,14 @@ export class Tier0StrokeClusterer {
     targetLayerId: LayerId,
     violetTriggerStrokeId?: NodeId
   ): NodeId[] {
-    const unclustered = this.nodeRepo.getUnclusteredStrokesInLayer(
+    const rawUnclustered = this.nodeRepo.getUnclusteredStrokesInLayer(
       targetCanvasId,
       targetLayerId
+    );
+    // Pointing-arrow connector strokes (A ──> B) act as directed spatial relations
+    // between clusters and must NOT bridge/merge two separate clusters.
+    const unclustered = rawUnclustered.filter(
+      (s) => detectPointingArrowStroke(s) === null
     );
     if (unclustered.length === 0) return [];
 
