@@ -10,7 +10,12 @@
     "test:headless": "vitest run tests/headless --reporter=dot --bail=1",
     "test": "vitest run --reporter=dot --bail=1",
     "ctx": "node scripts/context_query.mjs",
-    "verify:gate": "node scripts/context_query.mjs gate"
+    "verify:gate": "node scripts/context_query.mjs gate",
+    "apk:prepare": "node scripts/prepare_capacitor_android.mjs",
+    "apk:trigger": "node scripts/apk_workflow.mjs trigger",
+    "apk:pull": "node scripts/apk_workflow.mjs pull",
+    "apk:serve": "node scripts/apk_workflow.mjs serve",
+    "apk:build:local": "node scripts/apk_workflow.mjs build-local"
   },
   "dependencies": {
     "zod": "^3.24.2"

@@ -1,0 +1,67 @@
+name: Build Galaxy Tab Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout NoteFlow Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Java 21 (Temurin) for Android Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Dependencies, Verify Gate & Build Web Bundle
+        run: |
+          npm ci
+          npm run verify:gate
+          npm run build
+
+      - name: Prepare Capacitor Android Project & Assemble Debug APK
+        run: |
+          node scripts/prepare_capacitor_android.mjs
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../noteflow-galaxy-tab-debug.apk
+
+      - name: Upload Galaxy Tab S-Pen Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: noteflow-galaxy-tab-debug-apk
+          path: noteflow-galaxy-tab-debug.apk
+          retention-days: 30
+
+      - name: Publish Direct-Download APK to Rolling GitHub Release (latest-apk)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: "NoteFlow Galaxy Tab S-Pen Debug APK (Latest Build)"
+          body: |
+            Direct Android `.apk` installer for Samsung Galaxy Tab (S-Pen) & Android tablets.
+            - **Commit:** `${{ github.sha }}`
+            - **Direct Tablet Download:** Tap `noteflow-galaxy-tab-debug.apk` under **Assets** below to install directly on your Galaxy Tab.
+          prerelease: true
+          files: noteflow-galaxy-tab-debug.apk
