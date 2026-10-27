@@ -30,8 +30,9 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK Licenses (Pre-installed on ubuntu-latest)
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
 
       - name: Install Dependencies, Verify Gate & Build Web Bundle
         run: |
