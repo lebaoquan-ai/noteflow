@@ -192,4 +192,32 @@ describe('DualCanvasRenderer (Wet Overlay + Unified Dry Scene Graph)', () => {
 
     store.close();
   });
+
+  it('respects showGrid toggle: fills white canvas and conditionally renders dot grid', () => {
+    const store = CanvasStore.createInMemory('White Canvas Grid Test');
+    const renderer = new DualCanvasRenderer();
+
+    // Default: showGrid is false (clean white canvas)
+    expect(store.showGrid).toBe(false);
+    const frameNoGrid = store.buildSceneFrame(800, 600);
+    expect(frameNoGrid.showGrid).toBe(false);
+
+    const { ctx: ctxNoGrid, calls: callsNoGrid } = createRecordingContext();
+    renderer.renderDrySceneGraph(ctxNoGrid, 800, 600, frameNoGrid);
+    expect(callsNoGrid).toContain('clearRect');
+    expect(callsNoGrid).toContain('fillRect');
+    // Dot grid calls ctx.fillRect for each grid dot; when showGrid is false, only 1 background fillRect is called
+    expect(callsNoGrid.filter((c) => c === 'fillRect').length).toBe(1);
+
+    // Enabled: showGrid is true
+    store.showGrid = true;
+    const frameWithGrid = store.buildSceneFrame(800, 600);
+    expect(frameWithGrid.showGrid).toBe(true);
+
+    const { ctx: ctxWithGrid, calls: callsWithGrid } = createRecordingContext();
+    renderer.renderDrySceneGraph(ctxWithGrid, 800, 600, frameWithGrid);
+    expect(callsWithGrid.filter((c) => c === 'fillRect').length).toBeGreaterThan(1);
+
+    store.close();
+  });
 });

@@ -90,7 +90,7 @@ export class NoteFlowTabletApp {
   private selectedNodeIds = new Set<string>();
   private readonly scheduledJobs = new Set<string>();
   public inspectedBadgeId: JobId | null = null;
-  public pinnedRadialAnchor: ScreenPoint | null = null;
+  public pinnedRadialAnchor: ScreenPoint | null = screenPoint(100, 100);
   private pendingBadgeTap: {
     readonly pointerId: number;
     readonly startPt: ScreenPoint;
@@ -208,105 +208,151 @@ export class NoteFlowTabletApp {
         <canvas id="dry-canvas" class="nf-canvas nf-dry-canvas"></canvas>
         <canvas id="wet-canvas" class="nf-canvas nf-wet-canvas"></canvas>
 
-        <!-- Top Telemetry & Smart Layer Bar -->
-        <header class="nf-top-bar">
-          <div class="nf-brand">
-            <span class="nf-brand-dot"></span>
-            <strong>NoteFlow</strong>
-            <span class="nf-badge-pill" id="hud-fsm-state">IDLE</span>
-            <span class="nf-telemetry" id="hud-telemetry">pen • p:0.50 • 1.00x</span>
+        <!-- Minimalist Floating Settings Button (Top-Right) -->
+        <button id="btn-open-settings" class="nf-settings-btn" title="Open Settings" aria-label="Open Settings">
+          ⚙️
+        </button>
+
+        <!-- Slide-Over Settings Backdrop & Drawer -->
+        <div id="settings-backdrop" class="nf-settings-backdrop"></div>
+        <aside id="settings-drawer" class="nf-settings-drawer" aria-label="NoteFlow Settings">
+          <div class="nf-settings-header">
+            <div class="nf-settings-title-group">
+              <span class="nf-brand-dot"></span>
+              <h2 class="nf-settings-title">NoteFlow Settings</h2>
+            </div>
+            <button id="btn-close-settings" class="nf-btn nf-settings-close-btn" title="Close Settings">✕</button>
           </div>
 
-          <div class="nf-layer-bar" id="layer-toggles">
-            <button class="nf-chip nf-chip-active" data-layer="notes" title="Toggle Layer 0: My Notes">
-              1. Notes
-            </button>
-            <button class="nf-chip nf-chip-active" data-layer="hints_work" title="Toggle Layer 1: Hints & Scratchpad">
-              2. Scratchpad
-            </button>
-            <button class="nf-chip nf-chip-active" data-layer="ai_feedback" title="Toggle Layer 2: AI Annotations">
-              3. AI Verify
-            </button>
-            <button class="nf-chip nf-chip-active" data-layer="math_formal" title="Toggle Layer 3: LaTeX & Formal Proofs">
-              4. LaTeX
-            </button>
-            <button class="nf-chip nf-chip-teaching" id="btn-teaching-mode" title="One-Tap Teaching Mode (Hides Scratchpad & AI Hints)">
-              🎓 Teaching Mode: OFF
-            </button>
+          <!-- Canvas & Display -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">CANVAS & DISPLAY</div>
+            <div class="nf-settings-grid-2">
+              <button class="nf-btn" id="btn-toggle-grid" title="Toggle Infinite Dot Grid">▦ Dot Grid: OFF</button>
+              <button class="nf-chip nf-chip-teaching" id="btn-teaching-mode" title="One-Tap Teaching Mode (Hides Scratchpad & AI Hints)">🎓 Teaching: OFF</button>
+              <button class="nf-btn" id="btn-rotation-lock" title="Toggle 2-Finger Camera Rotation">🔒 Rotate: OFF</button>
+              <button class="nf-btn" id="btn-reset-camera" title="Reset Camera Zoom & Pan">⌖ Reset 100%</button>
+            </div>
+            <div class="nf-settings-grid-2" style="margin-top: 4px;">
+              <button class="nf-btn" id="btn-undo" title="Undo (or 2-Finger Tap)">↶ Undo</button>
+              <button class="nf-btn" id="btn-redo" title="Redo (or 3-Finger Tap)">↷ Redo</button>
+            </div>
           </div>
 
-          <div class="nf-history-bar">
-            <button class="nf-btn" id="btn-rotation-lock" title="Toggle 2-Finger Camera Rotation">🔒 Rotate: OFF</button>
-            <button class="nf-btn" id="btn-undo" title="Undo (or 2-Finger Tap)">↶ Undo</button>
-            <button class="nf-btn" id="btn-redo" title="Redo (or 3-Finger Tap)">↷ Redo</button>
-            <button class="nf-btn" id="btn-reset-camera" title="Reset Camera Zoom & Pan">⌖ 100%</button>
-          </div>
-        </header>
-
-        <!-- Left Docked Radial Tool Palette -->
-        <aside class="nf-tool-dock">
-          <div class="nf-dock-section-label">TOOLS</div>
-          <button class="nf-tool-btn nf-tool-active" data-tool="fountain_pen">
-            ✒️ <span>Fine Pen</span>
-          </button>
-          <button class="nf-tool-btn" data-tool="felt_tip_marker">
-            🖍️ <span>Marker</span>
-          </button>
-          <button class="nf-tool-btn nf-tool-violet" data-tool="ai_highlighter">
-            ✨ <span>AI Violet</span>
-          </button>
-          <button class="nf-tool-btn" data-tool="freehand_lasso">
-            ➰ <span>Lasso</span>
-          </button>
-          <button class="nf-tool-btn" data-tool="stroke_eraser">
-            ✂️ <span>Slice Erase</span>
-          </button>
-          <button class="nf-tool-btn" data-tool="pan_laser">
-            🔴 <span>Laser</span>
-          </button>
-
-          <div class="nf-dock-divider"></div>
-          <div class="nf-dock-section-label">INK COLOR</div>
-          <div class="nf-color-row" id="color-swatches">
-            <button class="nf-swatch nf-swatch-active" data-color="noir" style="background:${SEMANTIC_COLOR_HEX.noir}" title="Noir"></button>
-            <button class="nf-swatch" data-color="cobalt" style="background:${SEMANTIC_COLOR_HEX.cobalt}" title="Cobalt"></button>
-            <button class="nf-swatch" data-color="crimson" style="background:${SEMANTIC_COLOR_HEX.crimson}" title="Crimson"></button>
-            <button class="nf-swatch" data-color="forest" style="background:${SEMANTIC_COLOR_HEX.forest}" title="Forest"></button>
-            <button class="nf-swatch" data-color="amber" style="background:${SEMANTIC_COLOR_HEX.amber}" title="Amber"></button>
-            <button class="nf-swatch" data-color="violet" style="background:${SEMANTIC_COLOR_HEX.violet}" title="Violet (Triggers AI)"></button>
+          <!-- Tool Selection inside Settings -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">ACTIVE TOOL</div>
+            <div class="nf-settings-tools-grid">
+              <button class="nf-tool-btn nf-tool-active" data-tool="fountain_pen">✒️ <span>Fine Pen</span></button>
+              <button class="nf-tool-btn" data-tool="felt_tip_marker">🖍️ <span>Marker</span></button>
+              <button class="nf-tool-btn nf-tool-violet" data-tool="ai_highlighter">✨ <span>AI Violet</span></button>
+              <button class="nf-tool-btn" data-tool="freehand_lasso">➰ <span>Lasso</span></button>
+              <button class="nf-tool-btn" data-tool="stroke_eraser">✂️ <span>Slice Erase</span></button>
+              <button class="nf-tool-btn" data-tool="pan_laser">🔴 <span>Laser</span></button>
+            </div>
           </div>
 
-          <div class="nf-dock-divider"></div>
-          <div class="nf-dock-section-label">WIDTH</div>
-          <div class="nf-width-row" id="width-buttons">
-            <button class="nf-width-btn" data-width="1.6">Fine</button>
-            <button class="nf-width-btn nf-width-active" data-width="2.8">Med</button>
-            <button class="nf-width-btn" data-width="5.2">Bold</button>
+          <!-- Stroke Styling: Color & Width -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">INK COLOR</div>
+            <div class="nf-color-row" id="color-swatches" style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;">
+              <button class="nf-swatch nf-swatch-active" data-color="noir" style="background:${SEMANTIC_COLOR_HEX.noir}" title="Noir"></button>
+              <button class="nf-swatch" data-color="cobalt" style="background:${SEMANTIC_COLOR_HEX.cobalt}" title="Cobalt"></button>
+              <button class="nf-swatch" data-color="crimson" style="background:${SEMANTIC_COLOR_HEX.crimson}" title="Crimson"></button>
+              <button class="nf-swatch" data-color="forest" style="background:${SEMANTIC_COLOR_HEX.forest}" title="Forest"></button>
+              <button class="nf-swatch" data-color="amber" style="background:${SEMANTIC_COLOR_HEX.amber}" title="Amber"></button>
+              <button class="nf-swatch" data-color="violet" style="background:${SEMANTIC_COLOR_HEX.violet}" title="Violet (Triggers AI)"></button>
+            </div>
+
+            <div class="nf-settings-section-label" style="margin-top: 8px;">STROKE WIDTH</div>
+            <div class="nf-width-row" id="width-buttons">
+              <button class="nf-width-btn" data-width="1.6">Fine</button>
+              <button class="nf-width-btn nf-width-active" data-width="2.8">Med</button>
+              <button class="nf-width-btn" data-width="5.2">Bold</button>
+            </div>
+          </div>
+
+          <!-- Smart Layers -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">SMART LAYERS</div>
+            <div class="nf-settings-grid-2" id="layer-toggles">
+              <button class="nf-chip nf-chip-active" data-layer="notes" title="Toggle Layer 0: My Notes">1. Notes</button>
+              <button class="nf-chip nf-chip-active" data-layer="hints_work" title="Toggle Layer 1: Hints & Scratchpad">2. Scratchpad</button>
+              <button class="nf-chip nf-chip-active" data-layer="ai_feedback" title="Toggle Layer 2: AI Annotations">3. AI Verify</button>
+              <button class="nf-chip nf-chip-active" data-layer="math_formal" title="Toggle Layer 3: LaTeX & Formal Proofs">4. LaTeX</button>
+            </div>
+          </div>
+
+          <!-- Spatial Actions & Multimodal Vault -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">SPATIAL ACTIONS & VAULT</div>
+            <div class="nf-settings-grid-2">
+              <button class="nf-action-btn" id="btn-spawn-zettel">⚛ + Zettel Card</button>
+              <button class="nf-action-btn" id="btn-spawn-citation">📄 + PDF Citation</button>
+              <button class="nf-action-btn" id="btn-spawn-math">∑ + LaTeX Block</button>
+              <button class="nf-action-btn" id="btn-export-svg">📤 Export SVG</button>
+            </div>
+            <div class="nf-settings-grid-2" style="margin-top: 4px;">
+              <button class="nf-action-btn" id="btn-toggle-vault" title="Toggle Multimodal Zettel Vault Drawer">🗄️ Zettel Vault</button>
+              <button class="nf-action-btn" id="btn-reset-vault" title="Clear IndexedDB Vault & Reset Starter Canvas">🗑️ Reset Vault</button>
+            </div>
+          </div>
+
+          <!-- System Telemetry -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">SYSTEM TELEMETRY</div>
+            <div class="nf-settings-card">
+              <div class="nf-settings-status-row">
+                <span>FSM State:</span>
+                <span class="nf-badge-pill" id="hud-fsm-state">IDLE</span>
+              </div>
+              <div class="nf-settings-status-row">
+                <span>Input Stream:</span>
+                <span class="nf-telemetry" id="hud-telemetry">pen • p:0.50 • 1.00x</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Gestures Guide -->
+          <div class="nf-settings-section">
+            <div class="nf-settings-section-label">GESTURES GUIDE</div>
+            <ul class="nf-gestures-list">
+              <li><strong>Stylus / Mouse:</strong> Draw (&lt;4ms wet ink)</li>
+              <li><strong>1-Finger Drag:</strong> Pan canvas</li>
+              <li><strong>2-Finger Pinch:</strong> Zoom canvas</li>
+              <li><strong>2-Finger Tap:</strong> Undo</li>
+              <li><strong>3-Finger Tap:</strong> Redo</li>
+              <li><strong>1-Finger Hold + Stylus:</strong> Magic Lasso</li>
+              <li><strong>Wheel Center:</strong> Drag to move wheel</li>
+            </ul>
           </div>
         </aside>
 
-        <!-- Right Quick Spatial Actions & Split-Screen Citation Drawer -->
-        <aside class="nf-action-dock">
-          <div class="nf-dock-section-label">SPATIAL ACTIONS</div>
-          <button class="nf-action-btn" id="btn-spawn-zettel">
-            ⚛ + Zettel Card
+        <!-- Floating 6-Slot Radial Tool Wheel (Always Present & Draggable) -->
+        <div id="radial-wheel-overlay" class="nf-radial-wheel nf-radial-wheel-visible" aria-label="Tool Wheel">
+          <div id="radial-center-disc" class="nf-radial-center" title="Drag to move wheel">
+            <span class="nf-radial-center-icon" id="radial-center-icon">✒️</span>
+            <span class="nf-radial-center-label" id="radial-center-label">PEN</span>
+          </div>
+          <button class="nf-radial-slice nf-tool-active" data-radial-tool="fountain_pen" style="left: 90px; top: 24px;" title="Fine Pen">
+            <span>✒️</span><span>Pen</span>
           </button>
-          <button class="nf-action-btn" id="btn-spawn-citation">
-            📄 + PDF Citation
+          <button class="nf-radial-slice" data-radial-tool="felt_tip_marker" style="left: 147px; top: 57px;" title="Marker">
+            <span>🖍️</span><span>Mark</span>
           </button>
-          <button class="nf-action-btn" id="btn-spawn-math">
-            ∑ + LaTeX Block
+          <button class="nf-radial-slice" data-radial-tool="ai_highlighter" style="left: 147px; top: 123px;" title="AI Violet Highlighter">
+            <span>✨</span><span>AI</span>
           </button>
-          <button class="nf-action-btn" id="btn-export-svg">
-            📤 Export SVG
+          <button class="nf-radial-slice" data-radial-tool="freehand_lasso" style="left: 90px; top: 156px;" title="Lasso Selection">
+            <span>➰</span><span>Lasso</span>
           </button>
-          <button class="nf-action-btn" id="btn-toggle-vault" title="Toggle Multimodal Zettel Vault Drawer">
-            🗄️ Zettel Vault
+          <button class="nf-radial-slice" data-radial-tool="stroke_eraser" style="left: 33px; top: 123px;" title="Slice Eraser">
+            <span>✂️</span><span>Slice</span>
           </button>
-          <button class="nf-action-btn" id="btn-reset-vault" title="Clear IndexedDB Vault & Reset Starter Canvas">
-            🗑️ Reset Vault
+          <button class="nf-radial-slice" data-radial-tool="pan_laser" style="left: 33px; top: 57px;" title="Laser Pointer / Pan">
+            <span>🔴</span><span>Laser</span>
           </button>
-        </aside>
+        </div>
 
         <!-- Collapsible Multimodal Zettelkasten Vault Drawer (Decision 1A & 2A) -->
         <aside id="zettel-vault-drawer" class="nf-badge-popover" style="right: 16px; top: 76px; width: 320px; max-height: calc(100vh - 150px); overflow-y: auto;" aria-label="Multimodal Zettel Vault">
@@ -318,42 +364,6 @@ export class NoteFlowTabletApp {
             No symbol-marked keywords yet. Circle, underline, or #tag a concept on the canvas!
           </div>
         </aside>
-
-        <!-- Bottom Gesture Hint Pill -->
-        <footer class="nf-footer-hint">
-          <span><strong>Stylus/Mouse:</strong> Draw (<4ms Wet Ink)</span>
-          <span>•</span>
-          <span><strong>1-Finger Drag:</strong> Pan</span>
-          <span>•</span>
-          <span><strong>2-Finger Pinch:</strong> Zoom</span>
-          <span>•</span>
-          <span><strong>2-Finger Tap:</strong> Undo</span>
-          <span>•</span>
-          <span><strong>1-Finger Hold + Pen:</strong> Magic Lasso</span>
-        </footer>
-
-        <!-- Floating 6-Slot Radial Tool Wheel (Appears at 1-Finger Hold Anchor) -->
-        <div id="radial-wheel-overlay" class="nf-radial-wheel" aria-hidden="true">
-          <div class="nf-radial-center">HOLD<br/>WHEEL</div>
-          <button class="nf-radial-slice nf-tool-active" data-radial-tool="fountain_pen" style="left: 90px; top: 24px;">
-            <span>✒️</span><span>Pen</span>
-          </button>
-          <button class="nf-radial-slice" data-radial-tool="felt_tip_marker" style="left: 147px; top: 57px;">
-            <span>🖍️</span><span>Mark</span>
-          </button>
-          <button class="nf-radial-slice" data-radial-tool="ai_highlighter" style="left: 147px; top: 123px;">
-            <span>✨</span><span>AI</span>
-          </button>
-          <button class="nf-radial-slice" data-radial-tool="freehand_lasso" style="left: 90px; top: 156px;">
-            <span>➰</span><span>Lasso</span>
-          </button>
-          <button class="nf-radial-slice" data-radial-tool="stroke_eraser" style="left: 33px; top: 123px;">
-            <span>✂️</span><span>Slice</span>
-          </button>
-          <button class="nf-radial-slice" data-radial-tool="pan_laser" style="left: 33px; top: 57px;">
-            <span>🔴</span><span>Laser</span>
-          </button>
-        </div>
 
         <!-- AI Status Badge Inspection Popover -->
         <div id="badge-popover-overlay" class="nf-badge-popover" role="dialog" aria-label="AI Badge Details">
@@ -401,7 +411,6 @@ export class NoteFlowTabletApp {
 
   public selectTool(tool: RadialToolSlot): void {
     this.store.selectRadialTool(tool);
-    this.pinnedRadialAnchor = null;
     this.syncToolSelection();
     this.syncSwatchSelection();
     this.updateHudState();
@@ -417,7 +426,6 @@ export class NoteFlowTabletApp {
           this.pinnedRadialAnchor,
           tapPt
         );
-        this.pinnedRadialAnchor = null;
         if (sliceTool !== null) {
           this.selectTool(sliceTool);
           return;
@@ -508,9 +516,8 @@ export class NoteFlowTabletApp {
         const sliceHit = hitTestRadialWheelSlice(anchor, endPt);
         if (sliceHit !== null) {
           this.selectTool(sliceHit);
-        } else if (Math.hypot(endPt.x - anchor.x, endPt.y - anchor.y) < 24) {
-          this.pinnedRadialAnchor = anchor;
         }
+        this.pinnedRadialAnchor = anchor;
       }
 
       this.bridge.handlePointerUp(adapted);
@@ -548,6 +555,88 @@ export class NoteFlowTabletApp {
   }
 
   private bindToolbarEvents(): void {
+    // Settings Drawer Controls
+    const openSettingsBtn = this.root.querySelector<HTMLButtonElement>('#btn-open-settings');
+    const closeSettingsBtn = this.root.querySelector<HTMLButtonElement>('#btn-close-settings');
+    const settingsDrawer = this.root.querySelector<HTMLElement>('#settings-drawer');
+    const settingsBackdrop = this.root.querySelector<HTMLElement>('#settings-backdrop');
+
+    const toggleSettings = (open?: boolean) => {
+      const shouldOpen =
+        open !== undefined
+          ? open
+          : !settingsDrawer?.classList.contains('nf-settings-drawer-open');
+      settingsDrawer?.classList.toggle('nf-settings-drawer-open', shouldOpen);
+      settingsBackdrop?.classList.toggle('nf-settings-backdrop-visible', shouldOpen);
+      if (shouldOpen) {
+        this.updateHudState();
+      }
+    };
+
+    openSettingsBtn?.addEventListener('click', () => toggleSettings(true));
+    closeSettingsBtn?.addEventListener('click', () => toggleSettings(false));
+    settingsBackdrop?.addEventListener('click', () => toggleSettings(false));
+
+    // Dot grid toggle
+    const gridBtn = this.root.querySelector<HTMLButtonElement>('#btn-toggle-grid');
+    gridBtn?.addEventListener('click', () => {
+      this.store.showGrid = !this.store.showGrid;
+      gridBtn.textContent = this.store.showGrid
+        ? '▦ Dot Grid: ON'
+        : '▦ Dot Grid: OFF';
+      gridBtn.classList.toggle('nf-chip-active', this.store.showGrid);
+      this.scheduleDryRender();
+    });
+
+    // Center disc drag to freely reposition wheel on canvas
+    const centerDisc = this.root.querySelector<HTMLElement>('#radial-center-disc');
+    if (centerDisc) {
+      let isDragging = false;
+      let startX = 0;
+      let startY = 0;
+      let anchorStart = { x: 100, y: 100 };
+
+      centerDisc.addEventListener('pointerdown', (e: PointerEvent) => {
+        e.stopPropagation();
+        centerDisc.setPointerCapture(e.pointerId);
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        anchorStart = this.pinnedRadialAnchor ?? { x: 100, y: 100 };
+      });
+
+      centerDisc.addEventListener('pointermove', (e: PointerEvent) => {
+        if (!isDragging) return;
+        e.stopPropagation();
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        const clampedX = Math.max(90, Math.min(this.viewportWidth - 90, anchorStart.x + dx));
+        const clampedY = Math.max(90, Math.min(this.viewportHeight - 90, anchorStart.y + dy));
+        this.pinnedRadialAnchor = screenPoint(clampedX, clampedY);
+        this.updateHudState();
+      });
+
+      const endDrag = (e: PointerEvent) => {
+        if (isDragging) {
+          isDragging = false;
+          try {
+            centerDisc.releasePointerCapture(e.pointerId);
+          } catch {
+            // ignore if not captured
+          }
+        }
+      };
+
+      centerDisc.addEventListener('pointerup', endDrag);
+      centerDisc.addEventListener('pointercancel', endDrag);
+    }
+
+    // Stop pointerdown from passing through wheel overlay to wet canvas
+    const wheelOverlay = this.root.querySelector<HTMLElement>('#radial-wheel-overlay');
+    wheelOverlay?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+    });
+
     const toolButtons = this.root.querySelectorAll<HTMLButtonElement>('[data-tool]');
     toolButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -557,7 +646,9 @@ export class NoteFlowTabletApp {
 
     const radialButtons = this.root.querySelectorAll<HTMLButtonElement>('[data-radial-tool]');
     radialButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         this.selectTool(btn.dataset.radialTool as RadialToolSlot);
       });
     });
@@ -711,6 +802,27 @@ export class NoteFlowTabletApp {
           b.dataset.radialTool === activeTool
         )
       );
+
+    const toolMeta: Record<RadialToolSlot, { icon: string; label: string }> = {
+      fountain_pen: { icon: '✒️', label: 'PEN' },
+      felt_tip_marker: { icon: '🖍️', label: 'MARK' },
+      ai_highlighter: { icon: '✨', label: 'AI' },
+      freehand_lasso: { icon: '➰', label: 'LASSO' },
+      stroke_eraser: { icon: '✂️', label: 'SLICE' },
+      pan_laser: { icon: '🔴', label: 'LASER' },
+    };
+    const meta = toolMeta[activeTool] ?? { icon: '✒️', label: 'PEN' };
+    const iconEl = this.root.querySelector<HTMLElement>('#radial-center-icon');
+    const labelEl = this.root.querySelector<HTMLElement>('#radial-center-label');
+    if (iconEl) iconEl.textContent = meta.icon;
+    if (labelEl) labelEl.textContent = meta.label;
+
+    const centerDisc = this.root.querySelector<HTMLElement>('#radial-center-disc');
+    if (centerDisc) {
+      const activeColor = this.store.strokeStyle.colorId;
+      const hex = SEMANTIC_COLOR_HEX[activeColor] || '#1e293b';
+      centerDisc.style.borderColor = hex;
+    }
   }
 
   private syncSwatchSelection(): void {
@@ -719,6 +831,11 @@ export class NoteFlowTabletApp {
     swatches.forEach((s) => {
       s.classList.toggle('nf-swatch-active', s.dataset.color === activeColor);
     });
+    const centerDisc = this.root.querySelector<HTMLElement>('#radial-center-disc');
+    if (centerDisc) {
+      const hex = SEMANTIC_COLOR_HEX[activeColor] || '#1e293b';
+      centerDisc.style.borderColor = hex;
+    }
   }
 
   private syncLayerButtons(): void {

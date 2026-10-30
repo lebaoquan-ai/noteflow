@@ -95,7 +95,7 @@ export function exportCanvasArtboardSvg(
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${width} ${height}" width="${width}" height="${height}">`,
     `  <title>${escapeXml(title)}</title>`,
-    `  <rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="#FAF8F5" />`,
+    `  <rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="#FFFFFF" />`,
     ...elements,
     `</svg>`,
   ].join('\n');

@@ -254,6 +254,8 @@ export class DualCanvasRenderer {
     selectedNodeIds: ReadonlySet<string> = new Set()
   ): void {
     ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
 
     ctx.save();
     ctx.translate(frame.camera.panX, frame.camera.panY);
@@ -262,8 +264,10 @@ export class DualCanvasRenderer {
       ctx.rotate(frame.camera.rotation);
     }
 
-    // 1. Subtle Infinite Dot Grid
-    this.renderWorldDotGrid(ctx, frame);
+    // 1. Subtle Infinite Dot Grid (enabled via Settings)
+    if (frame.showGrid) {
+      this.renderWorldDotGrid(ctx, frame);
+    }
 
     // 2. Render Highlighters first (underneath pen ink)
     for (const node of frame.visibleNodes) {

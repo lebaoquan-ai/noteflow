@@ -82,6 +82,7 @@ export interface UnifiedSceneFrame {
   readonly visibleNodes: readonly SpatialNodeRecord[];
   readonly badges: readonly ProjectedJobBadge[];
   readonly layers?: ReadonlyMap<LayerId, SmartLayerState>;
+  readonly showGrid?: boolean;
 }
 
 export class CanvasStore {
@@ -93,6 +94,7 @@ export class CanvasStore {
   public readonly clusterer: Tier0StrokeClusterer;
   public readonly zettelSyncer: AutoZettelSyncer;
   public readonly history: CommandHistory;
+  public showGrid: boolean = false;
   private _canvasId!: CanvasId;
 
   private _camera: CameraState = { panX: 0, panY: 0, zoom: 1.0, rotation: 0 };
@@ -532,6 +534,7 @@ export class CanvasStore {
       layers: new Map(
         [...this.layersById.entries()].map(([k, v]) => [k, { ...v }])
       ),
+      showGrid: this.showGrid,
     };
   }
 
