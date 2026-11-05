@@ -604,5 +604,3 @@ When an autonomous AI coding agent begins working in this repository:
 4. **Never Break Type Invariants:** Run `npm run typecheck` and verify all Zod schemas pass before committing.
 5. **Run Headless Harness First:** Run `npm run test:headless` to verify that the `gesture_fsm` (including the 8px touch-slop deadzone), `CanvasCommand` undo/redo, and R-Tree spatial queries pass 100% before touching UI components.
 6. **No Direct State Hacks:** Never mutate canvas nodes outside of an atomic `CanvasCommand`.
-
-

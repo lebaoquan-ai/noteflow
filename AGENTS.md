@@ -1,7 +1,7 @@
 # NoteFlow — Antigravity Agent Instructions
 
 You are building **NoteFlow**, a Stylus-First, AI-Native Spatial Zettelkasten for tablets.
-The master architectural specification lives at `docs/SPEC.md`. Read relevant sections before planning any task.
+The master architectural specification lives at `docs/SPEC_rework_v2.md`. Read relevant sections before planning any task.
 
 ## 1. Execution Discipline (Plan -> Narrow Change -> Verify)
 - **Never boil the ocean:** Only implement the specific vertical slice or milestone requested by the user.

@@ -1,4 +1,4 @@
-# NoteFlow — Progress Update: Android `.apk` Workflow & Minimalist Clean Canvas UI
+      /# NoteFlow — Progress Update: Android `.apk` Workflow & Minimalist Clean Canvas UI
 
 **Date:** October 30, 2026  
 **Status:** Complete & Verified  
@@ -54,7 +54,7 @@ Following the completion of **Track 2 (Phase 5)** and **Track 3 (Phase 6)**, two
     1. **Canvas & Display:** Infinite Dot Grid toggle (`#btn-toggle-grid`), Teaching Mode (`#btn-teaching-mode`), Rotation Lock (`#btn-rotation-lock`), Reset Camera (`#btn-reset-camera`), Undo (`#btn-undo`), and Redo (`#btn-redo`).
     2. **Active Tool:** Direct tool selection grid (`[data-tool]`) synced with the radial wheel.
     3. **Ink Color & Stroke Width:** 6 semantic color swatches (`#color-swatches`) and 3 stroke width presets (`#width-buttons`).
-    4. **Smart Layers:** Visibility toggles for `1. Notes`, `2. Scratchpad`, `3. AI Verify`, and `4. LaTeX` (`#layer-toggles`).
+    4. **Smart Layers:** Visibility toggles for `1. Notes`, `2. Scratchpad`, `3. AI Verify`, and `4. LaTeX` (`#layer-/toggles`).
     5. **Spatial Actions & Vault:** `+ Zettel Card`, `+ PDF Citation`, `+ LaTeX Block`, `Export SVG`, `Zettel Vault` drawer toggle, and `Reset Vault`.
     6. **System Telemetry & Gestures Guide:** Live FSM state badge (`#hud-fsm-state`), pointer input stream readout (`#hud-telemetry`), and multi-touch gesture reference.
 
